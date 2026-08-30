@@ -1,0 +1,23 @@
+N_class,lower_bound,upper_bound,unit
+Very Low,,0.09,%
+Low,0.091,0.18,%
+Medium,0.181,0.27,%
+Optimum,0.271,0.36,%
+High,0.361,0.45,%
+Very High,0.45,,%
+
+P_Upland_class,lower_bound,upper_bound,unit
+Very Low,,9.0,ug/g
+Low,9.1,18.0,ug/g
+Medium,18.1,27.0,ug/g
+Optimum,27.1,36.0,ug/g
+High,36.1,45.0,ug/g
+Very High,45.0,,ug/g
+
+K_class,lower_bound,upper_bound,unit
+Very Low,,0.09,meq/100g
+Low,0.091,0.18,meq/100g
+Medium,0.181,0.27,meq/100g
+Optimum,0.271,0.36,meq/100g
+High,0.361,0.45,meq/100g
+Very High,0.45,,meq/100g
