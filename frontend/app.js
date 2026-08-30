@@ -27,3 +27,133 @@ function renderPoints(){const el=$('vra-points');if(!state.vra){el.textContent='
 
 async function loadHistory(){try{const d=await api('/api/history');const el=$('history-list');el.innerHTML=d.fields.map(f=>`<div class="history-row"><div><strong>${f.name}</strong><div class="muted">ID ${f.id} • ${f.length_m}×${f.width_m} m • ${f.crop||'—'}</div></div><a class="ghost" href="/api/report/${f.id}.pdf">PDF report</a></div>`).join('')||'<div class="muted">No fields yet.</div>'}catch(e){$('history-list').textContent=e.message}}
 $('refresh-history').onclick=loadHistory;
+// ==================== CROP -> VARIETY DROPDOWN ====================
+
+const varietyOptions = {
+  Rice: [
+    "BRRI dhan28",
+    "BRRI dhan29",
+    "BRRI dhan49",
+    "BRRI dhan52",
+    "BRRI dhan75"
+  ],
+
+  Wheat: [
+    "BARI Gom 26",
+    "BARI Gom 28",
+    "BARI Gom 30",
+    "BARI Gom 32",
+    "BARI Gom 33"
+  ],
+
+  Maize: [
+    "BARI Hybrid Maize 5",
+    "BARI Hybrid Maize 7",
+    "BARI Hybrid Maize 9",
+    "Local Maize",
+    "Hybrid Maize"
+  ],
+
+  Potato: [
+    "Cardinal",
+    "Diamant",
+    "Granola",
+    "Lady Rosetta",
+    "Local Potato"
+  ],
+
+  Tomato: [
+    "BARI Tomato 2",
+    "BARI Tomato 4",
+    "BARI Tomato 5",
+    "BARI Tomato 14",
+    "Hybrid Tomato"
+  ],
+
+  Eggplant: [
+    "BARI Begun 1",
+    "BARI Begun 2",
+    "BARI Begun 4",
+    "BARI Begun 5",
+    "Local Eggplant"
+  ],
+
+  Chili: [
+    "BARI Morich 1",
+    "BARI Morich 2",
+    "BARI Morich 3",
+    "Local Chili",
+    "Hybrid Chili"
+  ],
+
+  Mustard: [
+    "BARI Sarisha 11",
+    "BARI Sarisha 14",
+    "BARI Sarisha 15",
+    "BARI Sarisha 16",
+    "Local Mustard"
+  ],
+
+  Lentil: [
+    "BARI Masur 4",
+    "BARI Masur 5",
+    "BARI Masur 6",
+    "BARI Masur 7",
+    "Local Lentil"
+  ],
+
+  Onion: [
+    "BARI Piaz 1",
+    "BARI Piaz 3",
+    "BARI Piaz 4",
+    "BARI Piaz 5",
+    "Local Onion"
+  ]
+};
+
+
+const cropSelect = document.getElementById("field-crop");
+const varietySelect = document.getElementById("field-variety");
+
+if (cropSelect && varietySelect) {
+
+  cropSelect.addEventListener("change", () => {
+
+    const crop = cropSelect.value;
+
+    varietySelect.innerHTML = "";
+
+    if (!crop) {
+
+      varietySelect.disabled = true;
+
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "Select Crop First";
+
+      varietySelect.appendChild(option);
+
+      return;
+    }
+
+    varietySelect.disabled = false;
+
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "Select Variety";
+
+    varietySelect.appendChild(defaultOption);
+
+    const varieties = varietyOptions[crop] || [];
+
+    varieties.forEach((variety) => {
+
+      const option = document.createElement("option");
+
+      option.value = variety;
+      option.textContent = variety;
+
+      varietySelect.appendChild(option);
+    });
+  });
+}

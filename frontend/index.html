@@ -6,9 +6,12 @@
   <title>Smart Farming Platform</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body>
+
   <aside class="sidebar">
     <div class="brand">🌱 <span>Smart<br>Farming</span></div>
+
     <nav>
       <button class="nav-btn active" data-page="dashboard">📊 Dashboard</button>
       <button class="nav-btn" data-page="calculator">🧪 Fertilizer Calculator</button>
@@ -18,67 +21,511 @@
   </aside>
 
   <main class="main">
+
     <header class="topbar">
       <div>
         <div class="eyebrow">SMART FARMING • LIVE MONITORING</div>
         <h1>Smart Farming Platform</h1>
-        <p class="sub">Soil condition, environmental data, fertilizer planning and variable-rate analysis in one place.</p>
+        <p class="sub">
+          Soil condition, environmental data, fertilizer planning and variable-rate analysis in one place.
+        </p>
       </div>
-      <div class="status-pill"><span id="status-dot"></span><div><strong id="status-title">System</strong><small id="status-text">Waiting for sensor</small></div></div>
+
+      <div class="status-pill">
+        <span id="status-dot"></span>
+        <div>
+          <strong id="status-title">System</strong>
+          <small id="status-text">Waiting for sensor</small>
+        </div>
+      </div>
     </header>
 
+
+    <!-- ==================== DASHBOARD ==================== -->
+
     <section id="page-dashboard" class="page active">
-      <div class="section-head"><div><h2>Live Sensor Dashboard</h2><p>ESP32-ready endpoint. Values update from the latest stored reading.</p></div><button class="ghost" id="refresh-live">Refresh</button></div>
+
+      <div class="section-head">
+        <div>
+          <h2>Live Sensor Dashboard</h2>
+          <p>ESP32-ready endpoint. Values update from the latest stored reading.</p>
+        </div>
+
+        <button class="ghost" id="refresh-live">Refresh</button>
+      </div>
+
       <div class="cards">
-        <div class="card metric"><span>Nitrogen</span><strong id="live-n">—</strong><small>% FRG</small></div>
-        <div class="card metric"><span>Phosphorus</span><strong id="live-p">—</strong><small>µg/g FRG</small></div>
-        <div class="card metric"><span>Potassium</span><strong id="live-k">—</strong><small>meq/100g FRG</small></div>
-        <div class="card metric"><span>Soil pH</span><strong id="live-ph">—</strong><small>soil pH</small></div>
-        <div class="card metric"><span>Soil EC</span><strong id="live-ec">—</strong><small>sensor unit</small></div>
-        <div class="card metric"><span>Soil Moisture</span><strong id="live-moist">—</strong><small>%</small></div>
+
+        <div class="card metric">
+          <span>Nitrogen</span>
+          <strong id="live-n">—</strong>
+          <small>% FRG</small>
+        </div>
+
+        <div class="card metric">
+          <span>Phosphorus</span>
+          <strong id="live-p">—</strong>
+          <small>µg/g FRG</small>
+        </div>
+
+        <div class="card metric">
+          <span>Potassium</span>
+          <strong id="live-k">—</strong>
+          <small>meq/100g FRG</small>
+        </div>
+
+        <div class="card metric">
+          <span>Soil pH</span>
+          <strong id="live-ph">—</strong>
+          <small>soil pH</small>
+        </div>
+
+        <div class="card metric">
+          <span>Soil EC</span>
+          <strong id="live-ec">—</strong>
+          <small>sensor unit</small>
+        </div>
+
+        <div class="card metric">
+          <span>Soil Moisture</span>
+          <strong id="live-moist">—</strong>
+          <small>%</small>
+        </div>
+
       </div>
+
       <div class="two-col">
-        <div class="card"><h3>Environment</h3><div class="mini-grid"><div><span>Air Temp</span><b id="live-air-temp">—</b></div><div><span>Humidity</span><b id="live-air-hum">—</b></div><div><span>Soil Temp</span><b id="live-soil-temp">—</b></div><div><span>Updated</span><b id="live-time">—</b></div></div></div>
-        <div class="card"><h3>FRG Interpretation</h3><div class="class-grid"><div><span>N</span><b id="class-n">—</b></div><div><span>P</span><b id="class-p">—</b></div><div><span>K</span><b id="class-k">—</b></div></div></div>
+
+        <div class="card">
+          <h3>Environment</h3>
+
+          <div class="mini-grid">
+            <div>
+              <span>Air Temp</span>
+              <b id="live-air-temp">—</b>
+            </div>
+
+            <div>
+              <span>Humidity</span>
+              <b id="live-air-hum">—</b>
+            </div>
+
+            <div>
+              <span>Soil Temp</span>
+              <b id="live-soil-temp">—</b>
+            </div>
+
+            <div>
+              <span>Updated</span>
+              <b id="live-time">—</b>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>FRG Interpretation</h3>
+
+          <div class="class-grid">
+            <div>
+              <span>N</span>
+              <b id="class-n">—</b>
+            </div>
+
+            <div>
+              <span>P</span>
+              <b id="class-p">—</b>
+            </div>
+
+            <div>
+              <span>K</span>
+              <b id="class-k">—</b>
+            </div>
+          </div>
+        </div>
+
       </div>
+
     </section>
+
+
+    <!-- ==================== FERTILIZER CALCULATOR ==================== -->
 
     <section id="page-calculator" class="page">
-      <div class="section-head"><div><h2>Fertilizer Calculator & Sampling Plan</h2><p>Define the field and sampling spacing. The system generates automatic points.</p></div></div>
-      <div class="card form-card">
-        <div class="form-grid">
-          <label>Field name<input id="field-name" value="Field 1"></label>
-          <label>Length (m)<input id="field-length" type="number" min="0.1" step="0.1" value="20"></label>
-          <label>Width (m)<input id="field-width" type="number" min="0.1" step="0.1" value="10"></label>
-          <label>Sampling spacing (m)<input id="field-spacing" type="number" min="0.1" step="0.1" value="5"></label>
-          <label>Crop<input id="field-crop" value="Rice"></label>
-          <label>Variety<input id="field-variety" placeholder="e.g. BRRI dhan..." value=""></label>
-          <label>Season<input id="field-season" placeholder="e.g. Aus/Aman/Boro" value=""></label>
-          <label>Yield goal<input id="field-yield" placeholder="e.g. HYG" value="HYG"></label>
+
+      <div class="section-head">
+        <div>
+          <h2>Fertilizer Calculator & Sampling Plan</h2>
+          <p>
+            Define the field and sampling spacing. The system generates automatic points.
+          </p>
         </div>
-        <button class="primary" id="create-field">Create Field & Sampling Grid</button>
       </div>
+
+      <div class="card form-card">
+
+        <div class="form-grid">
+
+          <!-- Field Name -->
+          <label>
+            Field name
+            <input id="field-name" value="Field 1">
+          </label>
+
+          <!-- Length -->
+          <label>
+            Length (m)
+            <input
+              id="field-length"
+              type="number"
+              min="0.1"
+              step="0.1"
+              value="20"
+            >
+          </label>
+
+          <!-- Width -->
+          <label>
+            Width (m)
+            <input
+              id="field-width"
+              type="number"
+              min="0.1"
+              step="0.1"
+              value="10"
+            >
+          </label>
+
+          <!-- Sampling Spacing -->
+          <label>
+            Sampling spacing (m)
+            <input
+              id="field-spacing"
+              type="number"
+              min="0.1"
+              step="0.1"
+              value="5"
+            >
+          </label>
+
+
+          <!-- ==================== CROP ==================== -->
+
+          <label>
+            Crop
+
+            <select id="field-crop">
+              <option value="">Select Crop</option>
+              <option value="Rice">Rice</option>
+              <option value="Wheat">Wheat</option>
+              <option value="Maize">Maize</option>
+              <option value="Potato">Potato</option>
+              <option value="Tomato">Tomato</option>
+              <option value="Eggplant">Eggplant</option>
+              <option value="Chili">Chili</option>
+              <option value="Mustard">Mustard</option>
+              <option value="Lentil">Lentil</option>
+              <option value="Onion">Onion</option>
+            </select>
+
+          </label>
+
+
+          <!-- ==================== VARIETY ==================== -->
+
+          <label>
+            Variety
+
+            <select id="field-variety" disabled>
+              <option value="">Select Crop First</option>
+            </select>
+
+          </label>
+
+
+          <!-- ==================== SEASON ==================== -->
+
+          <label>
+            Season
+
+            <select id="field-season">
+              <option value="">Select Season</option>
+              <option value="Aus">Aus</option>
+              <option value="Aman">Aman</option>
+              <option value="Boro">Boro</option>
+              <option value="Rabi">Rabi</option>
+              <option value="Kharif">Kharif</option>
+              <option value="Summer">Summer</option>
+            </select>
+
+          </label>
+
+
+          <!-- ==================== YIELD GOAL ==================== -->
+
+          <label>
+            Yield goal
+
+            <select id="field-yield">
+              <option value="">Select Yield Goal</option>
+              <option value="Low">Low</option>
+              <option value="Medium">Medium</option>
+              <option value="High">High</option>
+            </select>
+
+          </label>
+
+        </div>
+
+
+        <button class="primary" id="create-field">
+          Create Field & Sampling Grid
+        </button>
+
+      </div>
+
+
+      <!-- ==================== SAMPLING GRID ==================== -->
+
       <div id="sampling-wrap" class="hidden">
-        <div class="section-head"><div><h3>Sampling Grid</h3><p id="grid-summary"></p></div><button class="ghost" id="reload-grid">Reload</button></div>
-        <div class="field-map card"><svg id="field-svg" viewBox="0 0 1000 520" preserveAspectRatio="none"></svg></div>
-        <div class="point-card card"><div class="point-header"><div><span id="active-point">P001</span><small id="point-help">Move to this point and capture the latest sensor data.</small></div><span class="badge" id="point-status">Pending</span></div><div class="form-grid point-inputs"><label>Moisture (%)<input id="sample-moist" type="number" step="0.01"></label><label>EC<input id="sample-ec" type="number" step="0.01"></label><label>pH<input id="sample-ph" type="number" step="0.01"></label><label>N FRG<input id="sample-n" type="number" step="0.0001"></label><label>P FRG<input id="sample-p" type="number" step="0.01"></label><label>K FRG<input id="sample-k" type="number" step="0.0001"></label></div><button class="primary" id="capture-point">Capture / Save Point</button></div>
-        <div class="card action-row"><button class="primary" id="run-calculation">Analyze Field</button><div id="calc-result"></div></div>
+
+        <div class="section-head">
+
+          <div>
+            <h3>Sampling Grid</h3>
+            <p id="grid-summary"></p>
+          </div>
+
+          <button class="ghost" id="reload-grid">
+            Reload
+          </button>
+
+        </div>
+
+
+        <div class="field-map card">
+          <svg
+            id="field-svg"
+            viewBox="0 0 1000 520"
+            preserveAspectRatio="none">
+          </svg>
+        </div>
+
+
+        <!-- ==================== SAMPLE POINT ==================== -->
+
+        <div class="point-card card">
+
+          <div class="point-header">
+
+            <div>
+              <span id="active-point">P001</span>
+
+              <small id="point-help">
+                Move to this point and capture the latest sensor data.
+              </small>
+            </div>
+
+            <span class="badge" id="point-status">
+              Pending
+            </span>
+
+          </div>
+
+
+          <div class="form-grid point-inputs">
+
+            <label>
+              Moisture (%)
+              <input
+                id="sample-moist"
+                type="number"
+                step="0.01">
+            </label>
+
+            <label>
+              EC
+              <input
+                id="sample-ec"
+                type="number"
+                step="0.01">
+            </label>
+
+            <label>
+              pH
+              <input
+                id="sample-ph"
+                type="number"
+                step="0.01">
+            </label>
+
+            <label>
+              N FRG
+              <input
+                id="sample-n"
+                type="number"
+                step="0.0001">
+            </label>
+
+            <label>
+              P FRG
+              <input
+                id="sample-p"
+                type="number"
+                step="0.01">
+            </label>
+
+            <label>
+              K FRG
+              <input
+                id="sample-k"
+                type="number"
+                step="0.0001">
+            </label>
+
+          </div>
+
+
+          <button class="primary" id="capture-point">
+            Capture / Save Point
+          </button>
+
+        </div>
+
+
+        <!-- ==================== ANALYSIS ==================== -->
+
+        <div class="card action-row">
+
+          <button class="primary" id="run-calculation">
+            Analyze Field
+          </button>
+
+          <div id="calc-result"></div>
+
+        </div>
+
       </div>
+
     </section>
+
+
+    <!-- ==================== VRA ==================== -->
 
     <section id="page-vra" class="page">
-      <div class="section-head"><div><h2>Variable Rate Application (VRA) Map</h2><p>Inverse-distance-weighted spatial interpolation from saved sampling points.</p></div><div class="inline"><label>Field ID<input id="vra-field-id" type="number" min="1" value="1"></label><button class="primary" id="load-vra">Load VRA</button></div></div>
-      <div class="vra-toolbar"><button class="chip active" data-layer="N">N</button><button class="chip" data-layer="P">P</button><button class="chip" data-layer="K">K</button></div>
-      <div class="card field-map tall"><canvas id="vra-canvas" width="1100" height="650"></canvas></div>
-      <div class="legend card"><span>Very Low</span><span>Low</span><span>Medium</span><span>Optimum</span><span>High</span><span>Very High</span></div>
-      <div class="card"><h3>Sampling Points</h3><div id="vra-points" class="point-table"></div></div>
+
+      <div class="section-head">
+
+        <div>
+          <h2>Variable Rate Application (VRA) Map</h2>
+          <p>
+            Inverse-distance-weighted spatial interpolation from saved sampling points.
+          </p>
+        </div>
+
+        <div class="inline">
+
+          <label>
+            Field ID
+            <input
+              id="vra-field-id"
+              type="number"
+              min="1"
+              value="1">
+          </label>
+
+          <button class="primary" id="load-vra">
+            Load VRA
+          </button>
+
+        </div>
+
+      </div>
+
+
+      <div class="vra-toolbar">
+
+        <button class="chip active" data-layer="N">
+          N
+        </button>
+
+        <button class="chip" data-layer="P">
+          P
+        </button>
+
+        <button class="chip" data-layer="K">
+          K
+        </button>
+
+      </div>
+
+
+      <div class="card field-map tall">
+
+        <canvas
+          id="vra-canvas"
+          width="1100"
+          height="650">
+        </canvas>
+
+      </div>
+
+
+      <div class="legend card">
+
+        <span>Very Low</span>
+        <span>Low</span>
+        <span>Medium</span>
+        <span>Optimum</span>
+        <span>High</span>
+        <span>Very High</span>
+
+      </div>
+
+
+      <div class="card">
+
+        <h3>Sampling Points</h3>
+
+        <div
+          id="vra-points"
+          class="point-table">
+        </div>
+
+      </div>
+
     </section>
 
+
+    <!-- ==================== HISTORY ==================== -->
+
     <section id="page-history" class="page">
-      <div class="section-head"><div><h2>History & Report</h2><p>Saved fields and report generation.</p></div><button class="ghost" id="refresh-history">Refresh</button></div>
-      <div class="card"><div id="history-list"></div></div>
+
+      <div class="section-head">
+
+        <div>
+          <h2>History & Report</h2>
+          <p>
+            Saved fields and report generation.
+          </p>
+        </div>
+
+        <button class="ghost" id="refresh-history">
+          Refresh
+        </button>
+
+      </div>
+
+
+      <div class="card">
+        <div id="history-list"></div>
+      </div>
+
     </section>
+
   </main>
+
+
   <script src="/static/app.js"></script>
+
 </body>
 </html>
