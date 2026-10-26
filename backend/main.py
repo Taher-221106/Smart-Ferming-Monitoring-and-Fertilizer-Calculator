@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import math
+import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
-DATA_DIR = BASE_DIR / "data"
+# Set SMART_FARMING_DATA_DIR=/var/data on Render when a persistent disk is mounted.
+# Local development defaults to the project's data/ directory.
+DATA_DIR = Path(os.environ.get("SMART_FARMING_DATA_DIR", str(BASE_DIR / "data")))
 DB_PATH = DATA_DIR / "smart_farming.db"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -84,6 +87,15 @@ def init_db() -> None:
             n_frg REAL NOT NULL,
             p_frg REAL NOT NULL,
             k_frg REAL NOT NULL,
+            air_temp REAL NOT NULL DEFAULT 0,
+            air_hum REAL NOT NULL DEFAULT 0,
+            soil_temp REAL NOT NULL DEFAULT 0,
+            n_corrected REAL NOT NULL DEFAULT 0,
+            p_corrected REAL NOT NULL DEFAULT 0,
+            k_corrected REAL NOT NULL DEFAULT 0,
+            reading_count INTEGER NOT NULL DEFAULT 1,
+            first_reading_at TEXT,
+            last_reading_at TEXT,
             captured_at TEXT NOT NULL,
             FOREIGN KEY(field_id) REFERENCES fields(id),
             UNIQUE(field_id, point_no)
@@ -100,6 +112,23 @@ def init_db() -> None:
         );
         """
     )
+    # Safe, additive migrations for databases created by earlier deployments.
+    # Existing field/sample records are retained.
+    sample_columns = {row[1] for row in conn.execute("PRAGMA table_info(samples)").fetchall()}
+    migrations = {
+        "air_temp": "REAL NOT NULL DEFAULT 0",
+        "air_hum": "REAL NOT NULL DEFAULT 0",
+        "soil_temp": "REAL NOT NULL DEFAULT 0",
+        "n_corrected": "REAL NOT NULL DEFAULT 0",
+        "p_corrected": "REAL NOT NULL DEFAULT 0",
+        "k_corrected": "REAL NOT NULL DEFAULT 0",
+        "reading_count": "INTEGER NOT NULL DEFAULT 1",
+        "first_reading_at": "TEXT",
+        "last_reading_at": "TEXT",
+    }
+    for column, definition in migrations.items():
+        if column not in sample_columns:
+            conn.execute(f"ALTER TABLE samples ADD COLUMN {column} {definition}")
     conn.commit()
     conn.close()
 
@@ -204,6 +233,15 @@ class SampleCreate(BaseModel):
     n_frg: float = 0
     p_frg: float = 0
     k_frg: float = 0
+    air_temp: float = 0
+    air_hum: float = 0
+    soil_temp: float = 0
+    n_corrected: float = 0
+    p_corrected: float = 0
+    k_corrected: float = 0
+    reading_count: int = Field(default=1, ge=1, le=10)
+    first_reading_at: str | None = None
+    last_reading_at: str | None = None
 
 
 class FertilizerRequest(BaseModel):
@@ -235,6 +273,73 @@ def live() -> dict[str, Any]:
     item["available"] = True
     item["classes"] = soil_classes(item["n_frg"], item["p_frg"], item["k_frg"])
     return item
+
+
+@app.get("/api/live/recent")
+def recent_live_readings(
+    after_id: int = Query(default=0, ge=0),
+    limit: int = Query(default=3, ge=1, le=10),
+    max_age_sec: int = Query(default=120, ge=10, le=600),
+) -> dict[str, Any]:
+    """Return new, recent sensor readings after a capture baseline.
+
+    The point-capture UI uses this to collect several fresh readings only after
+    the farmer starts a capture at a selected grid point, then averages them.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=max_age_sec)
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM sensor_readings WHERE id > ? ORDER BY id ASC LIMIT 500",
+        (after_id,),
+    ).fetchall()
+    conn.close()
+
+    fresh: list[dict[str, Any]] = []
+    numeric_keys = (
+        "air_temp", "air_hum", "soil_temp", "moisture", "ec", "ph",
+        "n_raw", "p_raw", "k_raw", "n_corrected", "p_corrected",
+        "k_corrected", "n_frg", "p_frg", "k_frg",
+    )
+    for row in rows:
+        item = dict(row)
+        try:
+            timestamp = datetime.fromisoformat(str(item["timestamp"]).replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            timestamp = timestamp.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        if timestamp < cutoff or timestamp > now + timedelta(seconds=15):
+            continue
+        item["age_seconds"] = max(0, int((now - timestamp).total_seconds()))
+        fresh.append(item)
+        if len(fresh) >= limit:
+            break
+
+    result: dict[str, Any] = {
+        "available": len(fresh) >= limit,
+        "count": len(fresh),
+        "required": limit,
+        "after_id": after_id,
+        "max_age_sec": max_age_sec,
+        "readings": [
+            {"id": r["id"], "timestamp": r["timestamp"], "age_seconds": r["age_seconds"]}
+            for r in fresh
+        ],
+    }
+    if fresh:
+        result["latest_timestamp"] = fresh[-1]["timestamp"]
+        result["latest_id"] = fresh[-1]["id"]
+    if len(fresh) >= limit:
+        result["average"] = {
+            key: sum(float(row[key]) for row in fresh) / len(fresh)
+            for key in numeric_keys
+        }
+        result["first_reading_at"] = fresh[0]["timestamp"]
+        result["last_reading_at"] = fresh[-1]["timestamp"]
+        result["reading_ids"] = [row["id"] for row in fresh]
+    return result
 
 
 @app.post("/api/esp32/readings")
@@ -312,16 +417,28 @@ def get_field(field_id: int) -> dict[str, Any]:
 @app.post("/api/samples")
 def save_sample(payload: SampleCreate) -> dict[str, Any]:
     conn = db()
-    exists = conn.execute("SELECT id FROM fields WHERE id = ?", (payload.field_id,)).fetchone()
-    if not exists:
+    field = conn.execute("SELECT * FROM fields WHERE id = ?", (payload.field_id,)).fetchone()
+    if not field:
         conn.close()
         raise HTTPException(status_code=404, detail="Field not found")
+    x_values, y_values = grid_axes(float(field["length_m"]), float(field["width_m"]), float(field["spacing_m"]))
+    point_index = payload.point_no - 1
+    if not x_values or not y_values or point_index < 0 or point_index >= len(x_values) * len(y_values):
+        conn.close()
+        raise HTTPException(status_code=400, detail="এই মাঠে নির্বাচিত নমুনা পয়েন্ট নেই")
+    expected_x = x_values[point_index % len(x_values)]
+    expected_y = y_values[point_index // len(x_values)]
+    if abs(float(payload.x_m) - expected_x) > 0.02 or abs(float(payload.y_m) - expected_y) > 0.02:
+        conn.close()
+        raise HTTPException(status_code=422, detail="নমুনা পয়েন্টের স্থানাঙ্ক গ্রিডের সঙ্গে মিলছে না")
     conn.execute(
         """
         INSERT INTO samples(
             field_id, point_no, x_m, y_m, moisture, ec, ph,
-            n_raw, p_raw, k_raw, n_frg, p_frg, k_frg, captured_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            n_raw, p_raw, k_raw, n_frg, p_frg, k_frg,
+            air_temp, air_hum, soil_temp, n_corrected, p_corrected, k_corrected,
+            reading_count, first_reading_at, last_reading_at, captured_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(field_id, point_no) DO UPDATE SET
             x_m=excluded.x_m,
             y_m=excluded.y_m,
@@ -334,6 +451,15 @@ def save_sample(payload: SampleCreate) -> dict[str, Any]:
             n_frg=excluded.n_frg,
             p_frg=excluded.p_frg,
             k_frg=excluded.k_frg,
+            air_temp=excluded.air_temp,
+            air_hum=excluded.air_hum,
+            soil_temp=excluded.soil_temp,
+            n_corrected=excluded.n_corrected,
+            p_corrected=excluded.p_corrected,
+            k_corrected=excluded.k_corrected,
+            reading_count=excluded.reading_count,
+            first_reading_at=excluded.first_reading_at,
+            last_reading_at=excluded.last_reading_at,
             captured_at=excluded.captured_at
         """,
         (
@@ -350,16 +476,25 @@ def save_sample(payload: SampleCreate) -> dict[str, Any]:
             payload.n_frg,
             payload.p_frg,
             payload.k_frg,
+            payload.air_temp,
+            payload.air_hum,
+            payload.soil_temp,
+            payload.n_corrected,
+            payload.p_corrected,
+            payload.k_corrected,
+            payload.reading_count,
+            payload.first_reading_at,
+            payload.last_reading_at,
             now_iso(),
         ),
     )
     conn.commit()
     conn.close()
-    return {"ok": True, "point_no": payload.point_no}
+    return {"ok": True, "point_no": payload.point_no, "field_id": payload.field_id, "reading_count": payload.reading_count, "captured_at": now_iso()}
 
 
-def grid_points(length_m: float, width_m: float, spacing_m: float) -> list[dict[str, float | int]]:
-    # Keep point centers half a spacing from field edges, matching the user's example.
+def grid_axes(length_m: float, width_m: float, spacing_m: float) -> tuple[list[float], list[float]]:
+    """Return X/Y coordinates of sample centers, starting half a spacing from an edge."""
     xs: list[float] = []
     x = min(spacing_m / 2.0, length_m / 2.0)
     while x < length_m - 1e-9:
@@ -370,20 +505,48 @@ def grid_points(length_m: float, width_m: float, spacing_m: float) -> list[dict[
     while y < width_m - 1e-9:
         ys.append(round(y, 3))
         y += spacing_m
-    points: list[dict[str, float | int]] = []
-    no = 1
-    for y in ys:
-        for x in xs:
-            points.append({"point_no": no, "x_m": x, "y_m": y})
-            no += 1
-    return points
+    return xs, ys
 
+
+def grid_points(length_m: float, width_m: float, spacing_m: float) -> list[dict[str, Any]]:
+    """Build a grid centered inside field edges and include farmer-readable coordinates."""
+    xs, ys = grid_axes(length_m, width_m, spacing_m)
+    points: list[dict[str, Any]] = []
+    no = 1
+    for row_no, y_value in enumerate(ys, start=1):
+        for col_no, x_value in enumerate(xs, start=1):
+            points.append({
+                "point_no": no,
+                "row_no": row_no,
+                "col_no": col_no,
+                "x_m": x_value,
+                "y_m": y_value,
+                "distance_from_origin_m": round(math.hypot(x_value, y_value), 3),
+                "distance_from_length_start_m": x_value,
+                "distance_from_width_start_m": y_value,
+                "distance_to_far_length_edge_m": round(max(0.0, length_m - x_value), 3),
+                "distance_to_far_width_edge_m": round(max(0.0, width_m - y_value), 3),
+            })
+            no += 1
+
+    # Store nearest-point distances in the response so the map and point card
+    # display measured distances instead of assuming that spacing always divides
+    # the field dimensions exactly.
+    for point in points:
+        neighbours = []
+        for other in points:
+            if other["point_no"] == point["point_no"]:
+                continue
+            distance = math.hypot(float(point["x_m"]) - float(other["x_m"]), float(point["y_m"]) - float(other["y_m"]))
+            neighbours.append({"point_no": other["point_no"], "distance_m": round(distance, 3)})
+        point["nearest_points"] = sorted(neighbours, key=lambda item: item["distance_m"])[:4]
+    return points
 
 @app.get("/api/fields/{field_id}/grid")
 def get_grid(field_id: int) -> dict[str, Any]:
     conn = db()
     field = conn.execute("SELECT * FROM fields WHERE id = ?", (field_id,)).fetchone()
-    samples = conn.execute("SELECT point_no, x_m, y_m, n_frg, p_frg, k_frg FROM samples WHERE field_id = ?", (field_id,)).fetchall()
+    samples = conn.execute("SELECT * FROM samples WHERE field_id = ?", (field_id,)).fetchall()
     conn.close()
     if not field:
         raise HTTPException(status_code=404, detail="Field not found")
@@ -393,7 +556,7 @@ def get_grid(field_id: int) -> dict[str, Any]:
         saved = sample_map.get(int(p["point_no"]))
         p["saved"] = bool(saved)
         if saved:
-            p.update({k: saved[k] for k in ("n_frg", "p_frg", "k_frg")})
+            p["sample"] = dict(saved)
     return {"field": dict(field), "points": points}
 
 
@@ -482,8 +645,15 @@ def history() -> dict[str, Any]:
     rows = conn.execute(
         "SELECT id, name, length_m, width_m, crop, variety, season, created_at FROM fields ORDER BY id DESC"
     ).fetchall()
+    fields = []
+    for row in rows:
+        item = dict(row)
+        item["area_m2"] = round(float(item["length_m"]) * float(item["width_m"]), 2)
+        count = conn.execute("SELECT COUNT(*) FROM samples WHERE field_id = ?", (item["id"],)).fetchone()[0]
+        item["sample_count"] = int(count)
+        fields.append(item)
     conn.close()
-    return {"fields": [dict(r) for r in rows]}
+    return {"fields": fields}
 
 
 @app.get("/api/report/{field_id}.pdf")

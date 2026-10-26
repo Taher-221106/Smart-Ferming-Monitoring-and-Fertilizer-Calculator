@@ -1,531 +1,139 @@
 <!doctype html>
-<html lang="en">
+<html lang="bn">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Smart Farming Platform</title>
+  <meta name="theme-color" content="#0d4d35">
+  <title>স্মার্ট ফার্মিং প্ল্যাটফর্ম</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-
 <body>
-
   <aside class="sidebar">
-    <div class="brand">🌱 <span>Smart<br>Farming</span></div>
-
-    <nav>
-      <button class="nav-btn active" data-page="dashboard">📊 Dashboard</button>
-      <button class="nav-btn" data-page="calculator">🧪 Fertilizer Calculator</button>
-      <button class="nav-btn" data-page="vra">🗺️ VRA Map</button>
-      <button class="nav-btn" data-page="history">📄 History & Report</button>
+    <div class="brand">🌱 <span>স্মার্ট<br>ফার্মিং</span></div>
+    <nav aria-label="প্রধান মেনু">
+      <button class="nav-btn active" data-page="dashboard">📊 ড্যাশবোর্ড</button>
+      <button class="nav-btn" data-page="calculator">🧪 সার পরিকল্পনা ও নমুনা</button>
+      <button class="nav-btn" data-page="vra">🗺️ প্রয়োগ মানচিত্র</button>
+      <button class="nav-btn" data-page="history">📄 ইতিহাস ও প্রতিবেদন</button>
     </nav>
+    <div class="sidebar-note">কৃষকের জন্য সহজ বাংলা নির্দেশনা</div>
   </aside>
 
   <main class="main">
-
     <header class="topbar">
       <div>
-        <div class="eyebrow">SMART FARMING • LIVE MONITORING</div>
-        <h1>Smart Farming Platform</h1>
-        <p class="sub">
-          Soil condition, environmental data, fertilizer planning and variable-rate analysis in one place.
-        </p>
+        <div class="eyebrow">স্মার্ট ফার্মিং • সরাসরি পর্যবেক্ষণ</div>
+        <h1>স্মার্ট ফার্মিং প্ল্যাটফর্ম</h1>
+        <p class="sub">মাটির অবস্থা, পরিবেশের তথ্য, সার পরিকল্পনা এবং স্থানভিত্তিক বিশ্লেষণ—এক জায়গায়।</p>
       </div>
-
-      <div class="status-pill">
+      <div class="status-pill" aria-live="polite">
         <span id="status-dot"></span>
-        <div>
-          <strong id="status-title">System</strong>
-          <small id="status-text">Waiting for sensor</small>
-        </div>
+        <div><strong id="status-title">অপেক্ষমাণ</strong><small id="status-text">সেন্সরের তথ্যের অপেক্ষায়</small></div>
       </div>
     </header>
 
+    <div id="app-message" class="app-message hidden" role="status" aria-live="polite"></div>
 
-    <!-- ==================== DASHBOARD ==================== -->
-
+    <!-- ড্যাশবোর্ড -->
     <section id="page-dashboard" class="page active">
-
       <div class="section-head">
-        <div>
-          <h2>Live Sensor Dashboard</h2>
-          <p>ESP32-ready endpoint. Values update from the latest stored reading.</p>
-        </div>
-
-        <button class="ghost" id="refresh-live">Refresh</button>
+        <div><h2>সরাসরি সেন্সর ড্যাশবোর্ড</h2><p>ESP32 থেকে পাওয়া সর্বশেষ সংরক্ষিত পাঠ এখানে দেখা যাবে।</p></div>
+        <button class="ghost" id="refresh-live">তথ্য হালনাগাদ</button>
       </div>
-
       <div class="cards">
-
-        <div class="card metric">
-          <span>Nitrogen</span>
-          <strong id="live-n">—</strong>
-          <small>% FRG</small>
-        </div>
-
-        <div class="card metric">
-          <span>Phosphorus</span>
-          <strong id="live-p">—</strong>
-          <small>µg/g FRG</small>
-        </div>
-
-        <div class="card metric">
-          <span>Potassium</span>
-          <strong id="live-k">—</strong>
-          <small>meq/100g FRG</small>
-        </div>
-
-        <div class="card metric">
-          <span>Soil pH</span>
-          <strong id="live-ph">—</strong>
-          <small>soil pH</small>
-        </div>
-
-        <div class="card metric">
-          <span>Soil EC</span>
-          <strong id="live-ec">—</strong>
-          <small>sensor unit</small>
-        </div>
-
-        <div class="card metric">
-          <span>Soil Moisture</span>
-          <strong id="live-moist">—</strong>
-          <small>%</small>
-        </div>
-
+        <div class="card metric"><span>নাইট্রোজেন (N)</span><strong id="live-n">—</strong><small>% FRG</small></div>
+        <div class="card metric"><span>ফসফরাস (P)</span><strong id="live-p">—</strong><small>µg/g FRG</small></div>
+        <div class="card metric"><span>পটাশিয়াম (K)</span><strong id="live-k">—</strong><small>meq/100g FRG</small></div>
+        <div class="card metric"><span>মাটির pH</span><strong id="live-ph">—</strong><small>pH</small></div>
+        <div class="card metric"><span>মাটির EC</span><strong id="live-ec">—</strong><small>সেন্সরের একক</small></div>
+        <div class="card metric"><span>মাটির আর্দ্রতা</span><strong id="live-moist">—</strong><small>%</small></div>
       </div>
-
       <div class="two-col">
-
-        <div class="card">
-          <h3>Environment</h3>
-
-          <div class="mini-grid">
-            <div>
-              <span>Air Temp</span>
-              <b id="live-air-temp">—</b>
-            </div>
-
-            <div>
-              <span>Humidity</span>
-              <b id="live-air-hum">—</b>
-            </div>
-
-            <div>
-              <span>Soil Temp</span>
-              <b id="live-soil-temp">—</b>
-            </div>
-
-            <div>
-              <span>Updated</span>
-              <b id="live-time">—</b>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <h3>FRG Interpretation</h3>
-
-          <div class="class-grid">
-            <div>
-              <span>N</span>
-              <b id="class-n">—</b>
-            </div>
-
-            <div>
-              <span>P</span>
-              <b id="class-p">—</b>
-            </div>
-
-            <div>
-              <span>K</span>
-              <b id="class-k">—</b>
-            </div>
-          </div>
-        </div>
-
+        <div class="card"><h3>পরিবেশের তথ্য</h3><div class="mini-grid">
+          <div><span>বাতাসের তাপমাত্রা</span><b id="live-air-temp">—</b></div>
+          <div><span>বাতাসের আর্দ্রতা</span><b id="live-air-hum">—</b></div>
+          <div><span>মাটির তাপমাত্রা</span><b id="live-soil-temp">—</b></div>
+          <div><span>সর্বশেষ হালনাগাদ</span><b id="live-time">—</b></div>
+        </div></div>
+        <div class="card"><h3>FRG-2024 অনুযায়ী মাটির শ্রেণি</h3><div class="class-grid">
+          <div><span>N — নাইট্রোজেন</span><b id="class-n">—</b></div>
+          <div><span>P — ফসফরাস</span><b id="class-p">—</b></div>
+          <div><span>K — পটাশিয়াম</span><b id="class-k">—</b></div>
+        </div><p class="muted small-note">শ্রেণি মাটির পরীক্ষার পাঠ ব্যাখ্যা করে; এটি নিজে থেকে নির্দিষ্ট সারমাত্রা নয়।</p></div>
       </div>
-
     </section>
 
-
-    <!-- ==================== FERTILIZER CALCULATOR ==================== -->
-
+    <!-- মাঠ ও নমুনা পরিকল্পনা -->
     <section id="page-calculator" class="page">
-
-      <div class="section-head">
-        <div>
-          <h2>Fertilizer Calculator & Sampling Plan</h2>
-          <p>
-            Define the field and sampling spacing. The system generates automatic points.
-          </p>
-        </div>
-      </div>
-
+      <div class="section-head"><div><h2>মাঠের তথ্য ও নমুনা পরিকল্পনা</h2><p>মাঠের মাপ ও নমুনার দূরত্ব দিন; সিস্টেম প্রতিটি নমুনার অবস্থান হিসাব করবে।</p></div></div>
       <div class="card form-card">
-
         <div class="form-grid">
-
-          <!-- Field Name -->
-          <label>
-            Field name
-            <input id="field-name" value="Field 1">
-          </label>
-
-          <!-- Length -->
-          <label>
-            Length (m)
-            <input
-              id="field-length"
-              type="number"
-              min="0.1"
-              step="0.1"
-              value="20"
-            >
-          </label>
-
-          <!-- Width -->
-          <label>
-            Width (m)
-            <input
-              id="field-width"
-              type="number"
-              min="0.1"
-              step="0.1"
-              value="10"
-            >
-          </label>
-
-          <!-- Sampling Spacing -->
-          <label>
-            Sampling spacing (m)
-            <input
-              id="field-spacing"
-              type="number"
-              min="0.1"
-              step="0.1"
-              value="5"
-            >
-          </label>
-
-
-          <!-- ==================== CROP ==================== -->
-
-          <label>
-            Crop
-
-            <select id="field-crop">
-              <option value="">Select Crop</option>
-              <option value="Rice">Rice</option>
-              <option value="Wheat">Wheat</option>
-              <option value="Maize">Maize</option>
-              <option value="Potato">Potato</option>
-              <option value="Tomato">Tomato</option>
-              <option value="Eggplant">Eggplant</option>
-              <option value="Chili">Chili</option>
-              <option value="Mustard">Mustard</option>
-              <option value="Lentil">Lentil</option>
-              <option value="Onion">Onion</option>
-            </select>
-
-          </label>
-
-
-          <!-- ==================== VARIETY ==================== -->
-
-          <label>
-            Variety
-
-            <select id="field-variety" disabled>
-              <option value="">Select Crop First</option>
-            </select>
-
-          </label>
-
-
-          <!-- ==================== SEASON ==================== -->
-
-          <label>
-            Season
-
-            <select id="field-season">
-              <option value="">Select Season</option>
-              <option value="Aus">Aus</option>
-              <option value="Aman">Aman</option>
-              <option value="Boro">Boro</option>
-              <option value="Rabi">Rabi</option>
-              <option value="Kharif">Kharif</option>
-              <option value="Summer">Summer</option>
-            </select>
-
-          </label>
-
-
-          <!-- ==================== YIELD GOAL ==================== -->
-
-          <label>
-            Yield goal
-
-            <select id="field-yield">
-              <option value="">Select Yield Goal</option>
-              <option value="Low">Low</option>
-              <option value="Medium">Medium</option>
-              <option value="High">High</option>
-            </select>
-
-          </label>
-
+          <label>মাঠের নাম<input id="field-name" value="মাঠ ১" maxlength="100" required></label>
+          <label>দৈর্ঘ্য (মিটার)<input id="field-length" type="number" min="0.1" step="0.1" value="20" required></label>
+          <label>প্রস্থ (মিটার)<input id="field-width" type="number" min="0.1" step="0.1" value="10" required></label>
+          <label>নমুনার ব্যবধান (মিটার)<input id="field-spacing" type="number" min="0.1" step="0.1" value="5" required></label>
+          <label>ফসল<select id="field-crop" required>
+            <option value="">ফসল নির্বাচন করুন</option>
+            <option value="Rice">ধান</option><option value="Wheat">গম</option><option value="Maize">ভুট্টা</option><option value="Potato">আলু</option><option value="Tomato">টমেটো</option><option value="Eggplant">বেগুন</option><option value="Chili">মরিচ</option><option value="Mustard">সরিষা</option><option value="Lentil">মসুর ডাল</option><option value="Onion">পেঁয়াজ</option>
+          </select></label>
+          <label>জাত<select id="field-variety" disabled><option value="">আগে ফসল নির্বাচন করুন</option></select></label>
+          <label>মৌসুম<select id="field-season"><option value="">মৌসুম নির্বাচন করুন</option><option value="Aus">আউশ</option><option value="Aman">আমন</option><option value="Boro">বোরো</option><option value="Rabi">রবি</option><option value="Kharif">খরিফ</option><option value="Summer">গ্রীষ্ম</option></select></label>
+          <label>লক্ষ্যমাত্রার ফলন<select id="field-yield"><option value="">ফলন নির্বাচন করুন</option><option value="Low">কম</option><option value="Medium">মাঝারি</option><option value="High">বেশি</option></select></label>
         </div>
-
-
-        <button class="primary" id="create-field">
-          Create Field & Sampling Grid
-        </button>
-
+        <div class="origin-note"><strong>শুরু করার নিয়ম:</strong> মাঠের একটি কোণকে <b>A (শুরুর কোণ)</b> হিসেবে চিহ্নিত করুন। A থেকে মাঠের দৈর্ঘ্য বরাবর <b>X</b> এবং প্রস্থ বরাবর <b>Y</b> মাপুন। মানচিত্রে প্রতিটি পয়েন্টের দূরত্ব মিটার এককে দেখানো হবে। GPS প্রয়োজন নেই; মাপার ফিতা ব্যবহার করুন।</div>
+        <button class="primary" id="create-field">মাঠ তৈরি ও নমুনার গ্রিড বানান</button>
       </div>
-
-
-      <!-- ==================== SAMPLING GRID ==================== -->
 
       <div id="sampling-wrap" class="hidden">
-
-        <div class="section-head">
-
-          <div>
-            <h3>Sampling Grid</h3>
-            <p id="grid-summary"></p>
-          </div>
-
-          <button class="ghost" id="reload-grid">
-            Reload
-          </button>
-
-        </div>
-
-
-        <div class="field-map card">
-          <svg
-            id="field-svg"
-            viewBox="0 0 1000 520"
-            preserveAspectRatio="none">
-          </svg>
-        </div>
-
-
-        <!-- ==================== SAMPLE POINT ==================== -->
+        <div class="section-head"><div><h3>নমুনা সংগ্রহের মানচিত্র</h3><p id="grid-summary"></p></div><button class="ghost" id="reload-grid">গ্রিড পুনরায় লোড</button></div>
+        <div class="origin-note"><strong>মানচিত্র বুঝুন:</strong> নিচের বাঁ কোণ A হলো রেফারেন্স কোণ (0,0)। প্রতিটি পয়েন্টে ক্লিক করলে X/Y দূরত্ব ও কাছের পয়েন্টগুলোর দূরত্ব দেখাবে। মাঠে একই কোণ A ধরে মাপবেন।</div>
+        <div class="field-map card"><svg id="field-svg" viewBox="0 0 1000 650" role="img" aria-label="মাঠের নমুনা পয়েন্টের পরিমাপযুক্ত মানচিত্র"></svg></div>
+        <div class="card point-list-card"><h3>সব নমুনা পয়েন্ট</h3><p class="muted">যে পয়েন্টে যেতে চান সেটি নির্বাচন করুন। সবুজ পয়েন্টে তথ্য সংরক্ষিত আছে।</p><div id="point-list" class="point-list"></div></div>
 
         <div class="point-card card">
-
-          <div class="point-header">
-
-            <div>
-              <span id="active-point">P001</span>
-
-              <small id="point-help">
-                Move to this point and capture the latest sensor data.
-              </small>
-            </div>
-
-            <span class="badge" id="point-status">
-              Pending
-            </span>
-
-          </div>
-
-
+          <div class="point-header"><div><span id="active-point">P001</span><small id="point-help">পয়েন্টের অবস্থানে গিয়ে সেন্সর স্থির রাখুন, তারপর নতুন পাঠ সংগ্রহ করুন।</small></div><span class="badge" id="point-status">অপেক্ষমাণ</span></div>
+          <div id="point-coordinate" class="coordinate-panel"></div>
+          <div id="point-neighbors" class="neighbor-panel"></div>
+          <div class="capture-instructions"><strong>নমুনা নেওয়ার নিয়ম:</strong> নির্বাচিত পয়েন্টের অবস্থানে সেন্সর বসান। এরপর নিচের বোতাম চাপুন। ESP32 থেকে পরপর <b>৩টি নতুন পাঠ</b> আসা পর্যন্ত অপেক্ষা করবে এবং গড় মান দেখাবে। পুরোনো পাঠকে নতুন পাঠ হিসেবে ব্যবহার করা হবে না।</div>
+          <div class="capture-controls"><button class="primary" id="start-capture">সেন্সর থেকে ৩টি নতুন পাঠ নিন</button><span id="sensor-capture-status" class="capture-status" role="status" aria-live="polite">এখনও কোনো নতুন পাঠ সংগ্রহ করা হয়নি।</span></div>
           <div class="form-grid point-inputs">
-
-            <label>
-              Moisture (%)
-              <input
-                id="sample-moist"
-                type="number"
-                step="0.01">
-            </label>
-
-            <label>
-              EC
-              <input
-                id="sample-ec"
-                type="number"
-                step="0.01">
-            </label>
-
-            <label>
-              pH
-              <input
-                id="sample-ph"
-                type="number"
-                step="0.01">
-            </label>
-
-            <label>
-              N FRG
-              <input
-                id="sample-n"
-                type="number"
-                step="0.0001">
-            </label>
-
-            <label>
-              P FRG
-              <input
-                id="sample-p"
-                type="number"
-                step="0.01">
-            </label>
-
-            <label>
-              K FRG
-              <input
-                id="sample-k"
-                type="number"
-                step="0.0001">
-            </label>
-
+            <label>বাতাসের তাপমাত্রা (°C)<input id="sample-air-temp" type="text" readonly value="—"></label>
+            <label>বাতাসের আর্দ্রতা (%)<input id="sample-air-hum" type="text" readonly value="—"></label>
+            <label>মাটির তাপমাত্রা (°C)<input id="sample-soil-temp" type="text" readonly value="—"></label>
+            <label>মাটির আর্দ্রতা (%)<input id="sample-moist" type="text" readonly value="—"></label>
+            <label>EC (সেন্সরের একক)<input id="sample-ec" type="text" readonly value="—"></label>
+            <label>মাটির pH<input id="sample-ph" type="text" readonly value="—"></label>
+            <label>নাইট্রোজেন N (% FRG)<input id="sample-n" type="text" readonly value="—"></label>
+            <label>ফসফরাস P (µg/g FRG)<input id="sample-p" type="text" readonly value="—"></label>
+            <label>পটাশিয়াম K (meq/100g FRG)<input id="sample-k" type="text" readonly value="—"></label>
           </div>
-
-
-          <button class="primary" id="capture-point">
-            Capture / Save Point
-          </button>
-
+          <details class="raw-details"><summary>কাঁচা ও সংশোধিত NPK মান দেখুন</summary><div class="form-grid point-inputs">
+            <label>N raw<input id="sample-n-raw" type="text" readonly value="—"></label><label>P raw<input id="sample-p-raw" type="text" readonly value="—"></label><label>K raw<input id="sample-k-raw" type="text" readonly value="—"></label>
+            <label>N corrected<input id="sample-n-corrected" type="text" readonly value="—"></label><label>P corrected<input id="sample-p-corrected" type="text" readonly value="—"></label><label>K corrected<input id="sample-k-corrected" type="text" readonly value="—"></label>
+          </div></details>
+          <div class="capture-footer"><span id="reading-window" class="muted">গড় তৈরি হলে পাঠের সময় দেখা যাবে।</span><button class="primary" id="capture-point" disabled>এই পয়েন্টের তথ্য সংরক্ষণ করুন</button></div>
         </div>
 
-
-        <!-- ==================== ANALYSIS ==================== -->
-
-        <div class="card action-row">
-
-          <button class="primary" id="run-calculation">
-            Analyze Field
-          </button>
-
-          <div id="calc-result"></div>
-
-        </div>
-
+        <div class="card action-row"><button class="primary" id="run-calculation">সংরক্ষিত নমুনা বিশ্লেষণ করুন</button><div id="calc-result"></div></div>
       </div>
-
     </section>
 
-
-    <!-- ==================== VRA ==================== -->
-
+    <!-- VRA map -->
     <section id="page-vra" class="page">
-
-      <div class="section-head">
-
-        <div>
-          <h2>Variable Rate Application (VRA) Map</h2>
-          <p>
-            Inverse-distance-weighted spatial interpolation from saved sampling points.
-          </p>
-        </div>
-
-        <div class="inline">
-
-          <label>
-            Field ID
-            <input
-              id="vra-field-id"
-              type="number"
-              min="1"
-              value="1">
-          </label>
-
-          <button class="primary" id="load-vra">
-            Load VRA
-          </button>
-
-        </div>
-
-      </div>
-
-
-      <div class="vra-toolbar">
-
-        <button class="chip active" data-layer="N">
-          N
-        </button>
-
-        <button class="chip" data-layer="P">
-          P
-        </button>
-
-        <button class="chip" data-layer="K">
-          K
-        </button>
-
-      </div>
-
-
-      <div class="card field-map tall">
-
-        <canvas
-          id="vra-canvas"
-          width="1100"
-          height="650">
-        </canvas>
-
-      </div>
-
-
-      <div class="legend card">
-
-        <span>Very Low</span>
-        <span>Low</span>
-        <span>Medium</span>
-        <span>Optimum</span>
-        <span>High</span>
-        <span>Very High</span>
-
-      </div>
-
-
-      <div class="card">
-
-        <h3>Sampling Points</h3>
-
-        <div
-          id="vra-points"
-          class="point-table">
-        </div>
-
-      </div>
-
+      <div class="section-head"><div><h2>স্থানভিত্তিক সার প্রয়োগ মানচিত্র (VRA)</h2><p>সংরক্ষিত নমুনার ভিত্তিতে IDW পদ্ধতিতে আনুমানিক স্থানভিত্তিক মান দেখানো হয়।</p></div><div class="inline"><label>মাঠের ID<input id="vra-field-id" type="number" min="1" value="1"></label><button class="primary" id="load-vra">মানচিত্র দেখুন</button></div></div>
+      <div class="vra-toolbar"><button class="chip active" data-layer="N">N — নাইট্রোজেন</button><button class="chip" data-layer="P">P — ফসফরাস</button><button class="chip" data-layer="K">K — পটাশিয়াম</button></div>
+      <div class="card field-map tall"><canvas id="vra-canvas" width="1100" height="650" aria-label="স্থানভিত্তিক সার প্রয়োগের মানচিত্র"></canvas></div>
+      <div class="legend card"><span>খুব কম</span><span>কম</span><span>মাঝারি</span><span>উপযুক্ত</span><span>বেশি</span><span>খুব বেশি</span></div>
+      <div class="card"><h3>সংরক্ষিত নমুনা পয়েন্ট</h3><div id="vra-points" class="point-table"></div></div>
+      <p class="small-note muted">এই মানচিত্র নমুনা পয়েন্ট থেকে গাণিতিক অনুমান। নির্ভরযোগ্য সার প্রয়োগের মাত্রার জন্য যাচাইকৃত FRG-2024 ফসলভিত্তিক সুপারিশ প্রয়োজন।</p>
     </section>
 
-
-    <!-- ==================== HISTORY ==================== -->
-
+    <!-- History -->
     <section id="page-history" class="page">
-
-      <div class="section-head">
-
-        <div>
-          <h2>History & Report</h2>
-          <p>
-            Saved fields and report generation.
-          </p>
-        </div>
-
-        <button class="ghost" id="refresh-history">
-          Refresh
-        </button>
-
-      </div>
-
-
-      <div class="card">
-        <div id="history-list"></div>
-      </div>
-
+      <div class="section-head"><div><h2>মাঠের ইতিহাস ও প্রতিবেদন</h2><p>আগের মাঠ খুলুন, নমুনার অগ্রগতি দেখুন অথবা প্রতিবেদন ডাউনলোড করুন।</p></div><button class="ghost" id="refresh-history">তালিকা হালনাগাদ</button></div>
+      <div class="card"><div id="history-list"></div></div>
     </section>
-
   </main>
-
-
   <script src="/static/app.js"></script>
-
 </body>
 </html>
