@@ -161,3 +161,50 @@ p { line-height: 1.7; }
 .capture-controls { align-items: flex-start; background: #f1faf4; border: 1px solid #c9e5d3; border-radius: 12px; padding: 13px 15px; }
 .capture-status { min-width: 0; }
 .field-map svg { min-height: 0; }
+
+/* FRG-2024 whole-field recommendation and quantitative VRA legend */
+.recommendation-report { display: grid; gap: 16px; margin: 16px 0; }
+.recommendation-card h3 { margin: 0 0 14px; }
+.recommendation-card h4 { margin: 18px 0 8px; color: #174735; font-size: 17px; }
+.recommendation-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.recommendation-title h3 { margin-top: 6px; }
+.yield-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 16px 0 10px; }
+.yield-comparison article { min-width: 0; padding: 17px; border: 1px solid #d5e8dc; border-radius: 14px; background: #f6faf7; }
+.yield-comparison article > span { display: block; color: #61776c; font-size: 14px; line-height: 1.6; margin-bottom: 8px; }
+.yield-comparison article > strong { display: block; color: #164c35; font-size: clamp(21px, 2.2vw, 30px); line-height: 1.4; overflow-wrap: anywhere; }
+.yield-comparison article p { color: #5e7268; font-size: 13px; line-height: 1.7; margin: 9px 0 0; }
+.nutrient-status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 12px 0 16px; }
+.nutrient-status-grid > div { display: grid; gap: 5px; border: 1px solid #dcebe2; background: #f5faf6; padding: 13px; border-radius: 12px; min-width: 0; }
+.nutrient-status-grid span, .nutrient-status-grid small { color: #647b70; font-size: 13px; line-height: 1.5; }
+.nutrient-status-grid strong { font-size: 18px; color: #164c35; }
+.table-wrap { width: 100%; overflow-x: auto; }
+.recommendation-table { border-collapse: collapse; width: 100%; min-width: 610px; margin: 12px 0; }
+.recommendation-table th, .recommendation-table td { border-bottom: 1px solid #e2ece6; padding: 12px 10px; text-align: left; vertical-align: top; line-height: 1.6; }
+.recommendation-table th { background: #eef7f1; color: #385d4a; font-size: 13px; }
+.recommendation-table td { font-size: 14px; }
+.recommendation-table td small { display: block; color: #687c72; margin-top: 4px; line-height: 1.6; }
+.report-warning { margin-top: 13px; border: 1px solid #ead5a8; border-left: 4px solid #d49a2e; border-radius: 12px; padding: 13px 15px; background: #fffaf0; color: #74551d; line-height: 1.7; }
+.report-warning p { margin: 6px 0 0; font-size: 13px; }
+.recommendation-card ul { margin: 8px 0 12px; padding-left: 24px; }
+.recommendation-card li { margin: 5px 0; line-height: 1.7; }
+.source-note { color: #74857d; font-size: 12px; line-height: 1.6; border-top: 1px solid #e5eee9; padding-top: 12px; margin: 18px 0 0; }
+.legend { display: block; }
+.legend-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; color: #254d3c; }
+.legend-heading strong { font-size: 17px; }
+.legend-heading > span { color: #6b8076; font-size: 13px; }
+.legend-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.legend-entry { display: flex; align-items: flex-start; gap: 10px; border: 1px solid #e0eae4; background: #fbfdfb; border-radius: 10px; padding: 11px; min-width: 0; }
+.legend-swatch { flex: 0 0 23px; width: 23px; height: 23px; border: 1px solid #84978c; border-radius: 5px; }
+.legend-entry > div { display: grid; gap: 4px; min-width: 0; }
+.legend-entry strong { color: #244b39; }
+.legend-entry span:not(.legend-swatch) { color: #526e61; font-size: 13px; overflow-wrap: anywhere; }
+.legend-entry small { display: block; color: #7b6a4c; font-size: 11px; line-height: 1.5; }
+@media (max-width: 1000px) {
+  .legend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nutrient-status-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .yield-comparison { grid-template-columns: 1fr; }
+  .legend-grid { grid-template-columns: 1fr; }
+  .recommendation-title { flex-direction: column; }
+}

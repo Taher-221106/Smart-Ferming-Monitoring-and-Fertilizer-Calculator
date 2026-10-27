@@ -1,34 +1,39 @@
-# স্মার্ট ফার্মিং মনিটরিং ও সার পরিকল্পনা
+# স্মার্ট ফার্মিং মনিটরিং ও FRG-2024 ভিত্তিক সার পরিকল্পনা
 
-ESP32 + RS485 7-in-1 মাটি সেন্সর + DHT22 + DS18B20-ভিত্তিক বাংলা Smart Farming ওয়েব অ্যাপ।
+ESP32 + RS485 7-in-1 মাটি সেন্সর + DHT22 + DS18B20-ভিত্তিক বাংলা Smart Farming ওয়েব অ্যাপ। Crop selector-এ কেবল **ধান, গম, মসুর ডাল ও পেঁয়াজ** আছে; মৌসুম, জাত ও yield goal আপলোড করা FRG-2024-এর যাচাইকৃত crop tables থেকে আসে।
 
-## ওয়েবসাইটের পাতা
+## ওয়েবসাইটের অংশ
 
-1. **ড্যাশবোর্ড** — ESP32-এর সর্বশেষ সেন্সর পাঠ ও FRG-2024 শ্রেণি।
-2. **মাঠ ও নমুনা পরিকল্পনা** — মাঠের দৈর্ঘ্য, প্রস্থ ও নমুনার ব্যবধান থেকে grid তৈরি; প্রতিটি পয়েন্টের X/Y অবস্থান, মাঠের রেফারেন্স কোণ A থেকে দূরত্ব এবং কাছের পয়েন্টগুলোর মাপ দেখা যায়।
-3. **সেন্সর থেকে নমুনা সংগ্রহ** — একটি পয়েন্ট নির্বাচন করলে `/api/live` থেকে সর্বশেষ sensor reading প্যানেলে স্বয়ংক্রিয়ভাবে হালনাগাদ হয়। নির্বাচিত পয়েন্টের পরের নতুন reading এলে “এই পয়েন্টের তথ্য সংরক্ষণ করুন” বোতাম সক্রিয় হয়; সেটি চাপলে সেই latest reading ওই field/point-এ save হয়।
-4. **স্থানভিত্তিক প্রয়োগ মানচিত্র (VRA)** — সংরক্ষিত নমুনার ভিত্তিতে IDW interpolation।
-5. **ইতিহাস ও প্রতিবেদন** — আগের মাঠ খুলে নমুনা চালিয়ে যাওয়া এবং PDF রিপোর্ট। PDF রিপোর্টের বিন্যাস বর্তমানে ইংরেজি।
+1. **সরাসরি সেন্সর ড্যাশবোর্ড** — ESP32-এর সর্বশেষ sensor reading ও preliminary N/P/K class।
+2. **মাঠ ও নমুনা পরিকল্পনা** — field length, width ও spacing থেকে local-coordinate sampling grid তৈরি; A `(0,0)` corner থেকে X/Y মাপ, nearest point distance এবং প্রতিটি point-এর ID দেখায়। GPS প্রয়োজন নেই; measuring tape ব্যবহার করা যায়।
+3. **Point-wise live sampling** — point নির্বাচন করলে live sensor value স্বয়ংক্রিয়ভাবে দেখা যায়। ওই point নির্বাচন করার পর ESP32-এর পরবর্তী নতুন reading এলে Save সক্রিয় হয়। সংরক্ষণ করলে reading নির্দিষ্ট point ID-তে যুক্ত হয়। প্রতি point-এর সর্বশেষ একটি reading সংরক্ষিত হয়; তিন-reading average নয়।
+4. **FRG-2024 crop recommendation** — সব grid point save না হলে full-field prescription তৈরি হয় না। পুরো মাঠের IDW surface থেকে পুষ্টি-শ্রেণি, Urea/TSP/MOP-এর FRG-table dose-range, area-integrated total amount, organic fertilizer এবং yield-goal তুলনা তৈরি হয়।
+5. **VRA map** — IDW interpolation-এর 40×40 raster surface। রঙ nutrient status / FRG dose class বোঝায়; প্রতিটি legend entry-তে fertilizer range (kg/ha) আছে। FRG crop table-এ High/Very High-এর আলাদা dose না থাকলে area gray দেখায়, zero dose বলে ধরে না।
+6. **ইতিহাস ও প্রতিবেদন** — আগে তৈরি করা মাঠ খুলে sample progress দেখা যায়; PDF report-এর বর্তমান body ইংরেজিতে।
 
-## Backend ও API
+## পদ্ধতি ও সীমাবদ্ধতা
 
-FastAPI + SQLite; frontend backend থেকেই serve হয়।
+- Spatial method: inverse-distance weighting (IDW, power 2) ব্যবহার করা হয়েছে। কম point-এ Kriging/ML-কে যাচাইকৃত বলে দাবি করা হয় না। চার বা তার বেশি sample থাকলে leave-one-out cross-validation-এর MAE/RMSE diagnostic দেখানো হয়। Sparse sampling-এ এই metric স্থিতিশীল accuracy guarantee নয়।
+- Crop/yield-goal/fertilizer table values `data/frg2024_crop_tables.json`-এ BARC Fertilizer Recommendation Guide-2024 থেকে transcribe করা হয়েছে; `source_page` field-এ printed page উল্লেখ থাকে।
+- Soil nutrient classes Appendix-8-এর critical-limit values অনুসরণ করে। Urea/TSP/MOP kg/ha conversion factor Appendix-10 থেকে (N→urea 2.17, P→TSP 5.0, K→MOP 2.0)।
+- Connected ESP32 NPK/soil sensor S, Mg, Zn, B ও Mo সরাসরি মাপে না। এই nutrient-এর নির্দিষ্ট rate laboratory soil test ছাড়া auto-assign করা হয় না।
+- Sensor output laboratory soil-test result দিয়ে calibrate না করা হলে, color map ও dose prescription-কে **প্রাথমিক নির্দেশক** হিসেবে ব্যবহার করতে হবে। FRG yield goal কোনো guaranteed yield prediction নয়; actual pre/post-fertilizer yield জানতে একই field-এর harvest/treatment history প্রয়োজন।
+- VRA field boundary বর্তমানে length/width থেকে তৈরি rectangular local-coordinate map, satellite/GPS polygon নয়। Real irregular boundary overlay করতে surveyed corner coordinates বা KML/GeoJSON দরকার।
 
-- `POST /api/esp32/readings` — ESP32-এর sensor reading গ্রহণ করে।
-- `GET /api/live` — সর্বশেষ reading ও ID ফেরত দেয়।
-- `GET /api/live/recent?after_id=<ID>&limit=3&max_age_sec=120` — নির্দিষ্ট reading ID-এর পর থেকে নতুন ও সাম্প্রতিক পাঠ সংগ্রহ করে; ৩টি পাঠ পাওয়া গেলে numerical sensor-field-এর গড় ফেরত দেয়।
-- `POST /api/fields` — মাঠ তৈরি করে।
-- `GET /api/fields/{field_id}/grid` — point coordinate, nearest-point distance ও saved sample ফেরত দেয়।
-- `POST /api/samples` — একটি grid point-এর নমুনা save/update করে।
+## API
 
-## নমুনা সংগ্রহের ব্যবহার
+- `POST /api/esp32/readings` — ESP32 sensor reading গ্রহণ করে।
+- `GET /api/live` — latest reading ফেরত দেয়।
+- `GET /api/live/recent` — ID-এর পরের নতুন readings নিয়ে average endpoint (legacy/diagnostic; current UI latest-reading capture ব্যবহার করে)।
+- `GET /api/frg/options` — crop/season/variety profile ও yield goal।
+- `POST /api/fields` — field ও grid তৈরি করে।
+- `GET /api/fields/{id}/grid` — point coordinates ও saved status।
+- `POST /api/samples` — point-এর sensor reading save/update করে।
+- `POST /api/fertilizer/calculate` — সব grid point saved থাকলে FRG-2024 recommendation ও yield reference তৈরি করে।
+- `GET /api/vra/{id}?grid=40` — field samples, IDW surface, legend, prescription, progress ও validation diagnostic।
+- `GET /api/history` — field history।
 
-1. মাঠের একটি বাস্তব কোণকে A (0,0) হিসেবে চিহ্নিত করুন।
-2. A থেকে দৈর্ঘ্য বরাবর X এবং প্রস্থ বরাবর Y মেপে grid-এর point-এ যান। GPS প্রয়োজন নেই; মাপার ফিতা ব্যবহার করা যায়।
-3. সেন্সর বসানোর পর মানচিত্রে সংশ্লিষ্ট point ID-তে ক্লিক করুন। প্যানেলে live value প্রতি ৫ সেকেন্ডে refresh হবে; ESP32 প্রতি ১৫ সেকেন্ডে upload করলে next new reading আসতে প্রায় ১৫ সেকেন্ড লাগতে পারে।
-4. প্যানেলে দেখানো মান যাচাই করে “এই পয়েন্টের তথ্য সংরক্ষণ করুন” চাপুন। এই সংস্করণে প্রতিটি point-এর জন্য সর্বশেষ একটি reading save হয়, ৩টি reading-এর average নয়। অন্য point-এ একই কাজ করুন।
-
-## স্থানীয়ভাবে চালানো
+## Local run
 
 ```bash
 python -m pip install -r backend/requirements.txt
@@ -37,10 +42,12 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
 তারপর `http://localhost:8000` খুলুন।
 
-## কৃষি-সংক্রান্ত সতর্কতা
+## Render persistent storage
 
-FRG-2024 critical-limit class মাটির পরীক্ষার ফল ব্যাখ্যার জন্য। যাচাইকৃত crop/variety/season/yield-goal dose table যুক্ত না করা পর্যন্ত সিস্টেম নির্দিষ্ট সারমাত্রা বানিয়ে দেয় না। ESP32-এর NPK calibration ও একক স্বাধীনভাবে যাচাই করা প্রয়োজন।
+SQLite database `SMART_FARMING_DATA_DIR`-এ থাকে (local default `data/`)। Render-এ persistent disk mount path `/var/data` হলে environment variable সেট করুন:
 
-## Deployment note
+```text
+SMART_FARMING_DATA_DIR=/var/data
+```
 
-SQLite database `data/smart_farming.db`-এ থাকে। Render-এর filesystem ephemeral হলে service restart বা redeploy-এ database মুছে যেতে পারে। স্থায়ী field/sample history দরকার হলে Render persistent disk বা managed database configure করুন।
+Persistent disk/managed database না থাকলে service restart/redeploy-এ field/sample history হারাতে পারে। Real Wi-Fi password, API secret বা database secret GitHub-এ commit করবেন না।

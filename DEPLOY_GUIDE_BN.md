@@ -1,65 +1,63 @@
-# GitHub ও Render-এ আপডেট প্রকাশ করার নিয়ম
+# GitHub ও Render-এ Smart Farming FRG-2024 আপডেট প্রকাশের নির্দেশনা
 
-এই আপডেটে frontend/backend দুটোই বদলেছে। শুধু ESP32 firmware upload করলে website-এর নতুন point-capture workflow চালু হবে না; updated project Render-এ deploy হতে হবে।
+এই সংস্করণে frontend ও FastAPI backend দুটোই পরিবর্তিত হয়েছে; `data/frg2024_crop_tables.json` নতুন প্রয়োজনীয় FRG crop/variety table। শুধু ESP32 firmware upload করলে web interface আপডেট হবে না।
 
-## ১. ZIP থেকে ফাইল নিন
+## ১. Local repository-তে file replace
 
-`Smart-Farming-Bangla-Updated-v2.zip` extract করুন। ভেতরের `Smart-Ferming-Monitoring-and-Fertilizer-Calculator-main` folder-এ updated project আছে।
+1. `Smart-Farming-Bangla-FRG2024-Final.zip` extract করুন।
+2. Extract folder-এর **ভেতরের contents** আপনার local clone-এর root folder-এ copy/paste করুন; একই path-এর file replace করুন।
+3. `.git`, `.gitignore`, `.devcontainer` delete করবেন না। `data/smart_farming.db`, `.env`, Wi-Fi password বা secret GitHub-এ upload করবেন না। ZIP-এ database intentionally থাকে না।
 
-## ২. GitHub repository-তে আপডেট দিন
+গুরুত্বপূর্ণ source paths:
 
-আপনার existing repository-র local copy থাকলে ZIP-এর folder থেকে সংশ্লিষ্ট files একই path-এ কপি/replace করুন:
-
-- `backend/main.py`
 - `frontend/index.html`
 - `frontend/app.js`
 - `frontend/style.css`
-- `README.md`
-- `DEPLOY_GUIDE_BN.md`
-- `esp32/README.md`
-- `esp32/Smart_Farming_ESP32_Refresh.ino`
+- `backend/main.py`
+- `backend/requirements.txt`
+- `data/frg2024_crop_tables.json`
+- `data/FRG-2024-NPK-critical-limits.csv`
+- `esp32/Smart_Farming_ESP32_Refresh.ino` (existing firmware; website work-এর জন্য বদলাতে হয়নি)
 
-`data/smart_farming.db` upload করবেন না। ZIP-এ এটি ইচ্ছাকৃতভাবে রাখা হয়নি। Real Wi-Fi credentials GitHub-এ commit করবেন না; firmware-এ placeholders আছে।
+## ২. GitHub Desktop দিয়ে commit ও push
 
-তারপর repository folder-এ terminal খুলে চালান:
+1. সঠিক repository নির্বাচন করুন: `Taher-221106/Smart-Ferming-Monitoring-and-Fertilizer-Calculator` (নামটির শেষে `-Project` নেই)।
+2. `Changes` tab-এ updated files review করুন।
+3. Summary: `Add FRG-2024 Bengali crop, VRA, and yield recommendations` লিখুন।
+4. **Commit to main** চাপুন; শেষে **Push origin** চাপুন।
+5. GitHub web page-এ branch `main`-এর সর্বশেষ commit দেখা যাচ্ছে কি না নিশ্চিত করুন।
 
-```bash
-git add backend/main.py frontend/index.html frontend/app.js frontend/style.css README.md DEPLOY_GUIDE_BN.md esp32/README.md esp32/Smart_Farming_ESP32_Refresh.ino
-git commit -m "Add Bengali sensor-based field sampling workflow"
-git push origin main
-```
+## ৩. Render deployment
 
-আপনার default branch `main` না হলে `git push origin main`-এর বদলে নিজের branch-এর নাম দিন। GitHub-এর web interface দিয়ে কাজ করলে প্রতিটি changed file-কে তার একই path-এ replace করতে হবে।
+1. Render Dashboard-এ আপনার Smart Farming service খুলুন।
+2. নিশ্চিত করুন linked repository হলো উপরের মূল repository এবং branch `main`।
+3. Auto-deploy হলে push-এর পর deployment শুরু হবে; না হলে manual deploy করুন।
+4. Deployment status `Live` না হওয়া পর্যন্ত নতুন frontend/API-কে live ধরে নেবেন না।
+5. Website খুলে hard refresh (`Ctrl+F5`) দিন। Health endpoint: `/api/health`; latest data endpoint: `/api/live`।
 
-## ৩. Render deploy করুন
+## ৪. নতুন workflow test করুন
 
-Render Dashboard-এ service খুলুন। GitHub branch connected থাকলে push-এর পর auto-deploy শুরু হওয়ার কথা। না হলে manual deploy করুন। Deploy শেষ হলে:
+1. Crop selector-এ ধান, গম, মসুর ডাল বা পেঁয়াজ নির্বাচন করুন। মৌসুম ও জাত FRG-2024 profile থেকে নির্বাচন করুন; yield goal স্বয়ংক্রিয়ভাবে দেখাবে।
+2. Field length/width/spacing দিয়ে grid তৈরি করুন। মাঠের একটি কোণ A `(0,0)` চিহ্নিত করে X/Y দূরত্ব মেপে প্রতিটি point-এ যান।
+3. Point ID ক্লিক করুন; live sensor readings স্বয়ংক্রিয়ভাবে refresh হবে। ওই point নির্বাচন করার পর ESP32 থেকে নতুন reading আসলে Save সক্রিয় হবে। মান যাচাই করে save করুন।
+4. Full-field analysis-এর আগে grid-এর সব point save করুন। Analysis incomplete হলে backend পুরো-জমির dose/yield recommendation দেবে না।
+5. Analyze চাপলে yield reference, FRG-2024 nutrient dose range এবং IDW VRA map দেখাবে। Map legend-এ range kg/ha-এ দেখুন। High/Very High class-এ আলাদা FRG crop-table dose না থাকলে gray দেখায়।
 
-- `https://smart-ferming-monitoring-and-fertilizer.onrender.com/` খুলুন এবং hard refresh (`Ctrl+F5`) দিন।
-- `https://smart-ferming-monitoring-and-fertilizer.onrender.com/api/health` পরীক্ষা করুন।
-- `https://smart-ferming-monitoring-and-fertilizer.onrender.com/api/live`-এ `available: true` আছে কি না দেখুন।
+## ৫. Persistent data
 
-## ৪. মাঠের পয়েন্টে সেন্সর পাঠ সংগ্রহ
-
-1. মাঠের একটি বাস্তব কোণকে A (0,0) হিসেবে চিহ্নিত করুন।
-2. দৈর্ঘ্য X এবং প্রস্থ Y বরাবর মিটার মেপে মানচিত্রের পয়েন্টে যান।
-3. মাঠে গিয়ে সেন্সর বসিয়ে মানচিত্রে ওই পয়েন্টের ID-তে ক্লিক করুন। প্যানেলে sensor value স্বয়ংক্রিয়ভাবে refresh হবে।
-4. ESP32 প্রতি ১৫ সেকেন্ডে upload করলে পরের নতুন পাঠ আসতে প্রায় ১৫ সেকেন্ড লাগতে পারে। নতুন reading এলে Save সক্রিয় হবে; মান যাচাই করে **এই পয়েন্টের তথ্য সংরক্ষণ করুন** চাপুন। এই সংস্করণে প্রতি পয়েন্টে সর্বশেষ একটি reading save হয়, তিনটি পাঠের গড় নয়।
-5. পরের পয়েন্টে গিয়ে একই পদ্ধতি অনুসরণ করুন।
-
-## ৫. Field/sample history স্থায়ী রাখুন
-
-SQLite ডাটাবেস `SMART_FARMING_DATA_DIR` environment variable দিয়ে নির্দিষ্ট করা যায়। Render service restart বা redeploy-এর পরও field/sample data রাখতে হলে Render-এ persistent disk configure করুন; mount path `/var/data` দিয়ে environment variable সেট করুন:
+Render-এর persistent disk mount path `/var/data` হলে environment variable যোগ করুন:
 
 ```text
 SMART_FARMING_DATA_DIR=/var/data
 ```
 
-যদি persistent disk/managed database configure না করা হয়, Render-এর ephemeral filesystem-এ থাকা SQLite data redeploy/restart হলে হারিয়ে যেতে পারে।
+Persistent disk/managed database configure না থাকলে ephemeral filesystem-এর SQLite file restart/redeploy-এ হারাতে পারে। Existing database schema additive migration দিয়ে update হয়; তবু production migration-এর আগে database backup রাখুন।
 
-## সীমাবদ্ধতা ও যাচাই
+## Validity & limitations
 
-- বাংলা UI, API, grid geometry, point-save flow এবং fresh three-reading average-এর backend route পরীক্ষা করা হয়েছে। Browser-এ live Render deployment থেকে end-to-end পরীক্ষা করা হয়নি; আপনার GitHub/Render deploy-এর পর বাস্তব device দিয়ে যাচাই করুন।
+- Backend Python syntax, JavaScript syntax, crop options, field/grid/sample flow, incomplete-sampling rejection, FRG calculation, IDW surface generation ও response structure local tests-এ যাচাই করা হয়েছে। Live Render-এ deployment ও physical sensor-to-site workflow deploy করার পর আপনার device দিয়ে যাচাই করতে হবে।
+- IDW surface একটি preliminary spatial estimate; sparse data-তে validated ML/Kriging claim নয়। ৪+ point থাকলে leave-one-out error দেখায়, তবে সেটি guarantee নয়।
+- NPK sensor unit/calibration lab soil test দিয়ে independently verify করা দরকার। S, Mg, Zn, B, Mo sensor-এ মাপা হয় না; lab results ছাড়া তাদের dose auto-fill হয় না।
+- Yield-before range FRG-2024 Table 2-এর general soil-test response band থেকে আসে, field-এর actual historical yield নয়। Yield-after FRG crop goal (± tolerance), guaranteed yield forecast নয়।
+- VRA boundary length/width-ভিত্তিক rectangle। Satellite imagery-এর উপর irregular real field boundary চাইলে surveyed corner coordinates অথবা KML/GeoJSON প্রয়োজন।
 - PDF report-এর body এখনও ইংরেজিতে।
-- ESP32 prototype firmware-এ HTTPS certificate verification বন্ধ করা আছে (`setInsecure()`); production use-এর আগে root CA validation যোগ করুন।
-- N/P/K calibration accuracy ও sensor units আলাদাভাবে soil-lab reference দিয়ে যাচাই করা প্রয়োজন। Website FRG-2024 crop-specific fertilizer dose বানিয়ে দেয় না; verified dose table প্রয়োজন।

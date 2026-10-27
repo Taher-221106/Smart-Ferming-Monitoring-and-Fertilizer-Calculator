@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -69,6 +70,7 @@ def init_db() -> None:
             variety TEXT,
             season TEXT,
             yield_goal TEXT,
+            rhizobium_used INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         );
 
@@ -129,6 +131,9 @@ def init_db() -> None:
     for column, definition in migrations.items():
         if column not in sample_columns:
             conn.execute(f"ALTER TABLE samples ADD COLUMN {column} {definition}")
+    field_columns = {row[1] for row in conn.execute("PRAGMA table_info(fields)").fetchall()}
+    if "rhizobium_used" not in field_columns:
+        conn.execute("ALTER TABLE fields ADD COLUMN rhizobium_used INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -136,59 +141,222 @@ def init_db() -> None:
 init_db()
 
 
-# FRG-2024 Appendix-8 critical-limit classes shown by the user.
-# These are interpretation ranges, not crop-specific fertilizer doses.
-N_CLASSES = [
-    (0.09, "Very Low"),
-    (0.18, "Low"),
-    (0.27, "Medium"),
-    (0.36, "Optimum"),
-    (0.45, "High"),
-    (math.inf, "Very High"),
-]
-P_CLASSES = [
-    (9.0, "Very Low"),
-    (18.0, "Low"),
-    (27.0, "Medium"),
-    (36.0, "Optimum"),
-    (45.0, "High"),
-    (math.inf, "Very High"),
-]
-K_CLASSES = [
-    (0.09, "Very Low"),
-    (0.18, "Low"),
-    (0.27, "Medium"),
-    (0.36, "Optimum"),
-    (0.45, "High"),
-    (math.inf, "Very High"),
-]
-
-# Fertilizer analysis factors used only for source-to-nutrient conversion.
-# Actual FRG crop/variety/HYG dose tables are intentionally kept in a separate
-# data file so they can be entered from the user's guidebook without inventing values.
-FERTILIZERS = {
-    "Urea": {"N": 0.46, "P": 0.0, "K": 0.0},
-    "TSP": {"N": 0.0, "P": 0.20, "K": 0.0},
-    "MOP": {"N": 0.0, "P": 0.0, "K": 0.50},
-    "DAP": {"N": 0.18, "P": 0.20, "K": 0.0},
+# FRG-2024 source tables were transcribed from the uploaded guidebook.
+FRG_PROFILES = json.loads((BASE_DIR / "data" / "frg2024_crop_tables.json").read_text(encoding="utf-8"))["profiles"]
+SOIL_CLASS_LABELS = ["Very Low", "Low", "Medium", "Optimum", "High", "Very High"]
+N_CLASS_UPPER = [0.09, 0.18, 0.27, 0.36, 0.45]
+P_CLASS_UPPER_UPLAND = [9.0, 18.0, 27.0, 36.0, 45.0]
+P_CLASS_UPPER_RICE = [7.5, 15.0, 22.5, 30.0, 37.5]
+K_CLASS_UPPER = [0.09, 0.18, 0.27, 0.36, 0.45]
+FERTILIZER_PRODUCTS = {
+    "Urea": {"label_bn": "ইউরিয়া", "nutrient": "N", "factor": 2.17},
+    "TSP": {"label_bn": "টিএসপি", "nutrient": "P", "factor": 5.0},
+    "MOP": {"label_bn": "এমওপি (পটাশ)", "nutrient": "K", "factor": 2.0},
+}
+MAP_STATUS_COLORS = {
+    "Optimum": "#2f965d", "Medium": "#e8df51", "Low": "#ef9e42",
+    "Very Low": "#d93d38", "High": "#9ba7a0", "Very High": "#737f78",
 }
 
 
-def class_from_thresholds(value: float, table: list[tuple[float, str]]) -> str:
+def resolve_profile(crop: str, variety: str = "", season: str = "") -> dict[str, Any] | None:
+    """Resolve an internal profile|cultivar token or a legacy cultivar value."""
+    if variety and "|" in variety:
+        profile_key, cultivar = variety.split("|", 1)
+        profile = FRG_PROFILES.get(profile_key)
+        if profile and profile["crop"] == crop and profile["season"] == season and cultivar in profile["varieties"]:
+            return profile
+        return None
+    candidates = [p for p in FRG_PROFILES.values() if p["crop"] == crop and (not season or p["season"] == season)]
+    cultivar = variety.split("|", 1)[-1] if variety else ""
+    if cultivar:
+        for profile in candidates:
+            if cultivar in profile["varieties"]:
+                return profile
+        return None
+    if crop == "Wheat": return FRG_PROFILES["wheat_45"]
+    if crop == "Lentil": return FRG_PROFILES["lentil_18"]
+    if crop == "Rice":
+        return {"Boro": FRG_PROFILES["rice_boro_60"], "Aus": FRG_PROFILES["rice_aus_50"], "Aman": FRG_PROFILES["rice_taman_50"]}.get(season)
+    if crop == "Onion":
+        return FRG_PROFILES["summer_onion_12"] if season == "Summer" else FRG_PROFILES["onion_20"]
+    return None
+
+
+def _soil_class(value: float, upper_bounds: list[float]) -> str:
     v = max(0.0, float(value))
-    for upper, label in table:
+    for idx, upper in enumerate(upper_bounds):
         if v <= upper:
-            return label
+            return SOIL_CLASS_LABELS[idx]
     return "Very High"
 
 
-def soil_classes(n: float, p: float, k: float) -> dict[str, str]:
-    return {
-        "N": class_from_thresholds(n, N_CLASSES),
-        "P": class_from_thresholds(p, P_CLASSES),
-        "K": class_from_thresholds(k, K_CLASSES),
-    }
+def soil_classes(n: float, p: float, k: float, crop: str = "") -> dict[str, str]:
+    p_bounds = P_CLASS_UPPER_RICE if crop == "Rice" else P_CLASS_UPPER_UPLAND
+    return {"N": _soil_class(n, N_CLASS_UPPER), "P": _soil_class(p, p_bounds), "K": _soil_class(k, K_CLASS_UPPER)}
 
+
+def critical_limit_response(n: float, p: float, k: float, crop: str) -> dict[str, Any]:
+    # FRG-2024 Table 2 and Fig. 1, printed pp.11-12. The guide reports general
+    # no-fertilizer response bands, not a guaranteed field-specific yield model.
+    p_critical = 10.0 if crop == "Rice" else 12.0  # wetland rice / upland, Appendix-8
+    ratios = {"N": float(n) / 0.12 * 100, "P": float(p) / p_critical * 100, "K": float(k) / 0.12 * 100}
+    limiting = min(ratios, key=ratios.get)
+    pct = ratios[limiting]
+    if pct <= 75: cls, response = "Very Low", [25.0, 50.0]
+    elif pct <= 150: cls, response = "Low", [50.0, 75.0]
+    elif pct <= 225: cls, response = "Medium", [75.0, 100.0]
+    elif pct <= 300: cls, response = "Optimum", None
+    elif pct <= 375: cls, response = "High", None
+    else: cls, response = "Very High", None
+    return {"limiting_nutrient": limiting, "critical_limit_percent": pct, "response_class": cls, "unfertilized_yield_percent_range": response}
+
+
+def range_for_status(profile: dict[str, Any], nutrient: str, status: str) -> list[float] | None:
+    # Crop tables show only Optimum, Medium, Low and Very Low rows. Do not guess
+    # a distinct nutrient dose where FRG does not provide one for High / Very High.
+    index = {"Optimum": 0, "Medium": 1, "Low": 2, "Very Low": 3}.get(status)
+    rows = profile.get("nutrients", {}).get(nutrient)
+    if index is None or rows is None: return None
+    value = rows[index]
+    return [0.0, 0.0] if value is None else [float(value[0]), float(value[1])]
+
+
+def product_recommendation(profile: dict[str, Any], status: str, product_key: str) -> dict[str, Any]:
+    product = FERTILIZER_PRODUCTS[product_key]
+    nutrient_range = range_for_status(profile, product["nutrient"], status)
+    if nutrient_range is None:
+        return {"applicable": False, "status_class": status, "min_kg_ha": None, "max_kg_ha": None,
+                "nutrient": product["nutrient"], "product_label_bn": product["label_bn"],
+                "note_bn": "এই মাটির শ্রেণির জন্য FRG-2024 ফসলের সারণিতে আলাদা মাত্রা নেই; নিশ্চিত soil-test নিয়ে স্থানীয় কৃষি কর্মকর্তার পরামর্শ নিন।"}
+    factor = float(product["factor"])
+    return {"applicable": True, "status_class": status, "nutrient": product["nutrient"],
+            "nutrient_min_kg_ha": nutrient_range[0], "nutrient_max_kg_ha": nutrient_range[1],
+            "min_kg_ha": nutrient_range[0] * factor, "max_kg_ha": nutrient_range[1] * factor,
+            "factor": factor, "product_label_bn": product["label_bn"],
+            "note_bn": "FRG-2024 Appendix-10-এর nutrient-to-fertilizer conversion factor ব্যবহার করা হয়েছে।"}
+
+def build_map_legend(profile: dict[str, Any], rhizobium_used: bool = False) -> dict[str, Any]:
+    legend: dict[str, Any] = {}
+    for product_key, product in FERTILIZER_PRODUCTS.items():
+        entries = []
+        if product_key == "Urea" and profile["crop"] == "Lentil" and rhizobium_used:
+            entries.append({"status_class": "Optimum", "color": MAP_STATUS_COLORS["Optimum"],
+                            "applicable": True, "min_kg_ha": 0.0, "max_kg_ha": 0.0,
+                            "label_bn": product["label_bn"],
+                            "note_bn": "রাইজোবিয়াম ইনোকুল্যান্ট ব্যবহার নির্বাচিত; FRG-2024 অনুযায়ী ইউরিয়া প্রয়োগ নয়।"})
+        else:
+            for status in ["Very Low", "Low", "Medium", "Optimum", "High", "Very High"]:
+                item = product_recommendation(profile, status, product_key)
+                entries.append({"status_class": status, "color": MAP_STATUS_COLORS[status],
+                                "applicable": item["applicable"], "min_kg_ha": item["min_kg_ha"],
+                                "max_kg_ha": item["max_kg_ha"], "label_bn": item["product_label_bn"],
+                                "note_bn": item["note_bn"]})
+        legend[product_key] = entries
+    for nutrient, label in [("N", "নাইট্রোজেনের শ্রেণি"), ("P", "ফসফরাসের শ্রেণি"), ("K", "পটাশিয়ামের শ্রেণি")]:
+        legend[f"{nutrient}_STATUS"] = [{"status_class": status, "color": MAP_STATUS_COLORS[status],
+                                       "applicable": True, "label_bn": label} for status in SOIL_CLASS_LABELS]
+    return legend
+
+
+def build_vra_surface(field: dict[str, Any], samples: list[dict[str, Any]], profile: dict[str, Any], grid: int = 24) -> list[dict[str, Any]]:
+    grid = max(8, min(50, int(grid)))
+    surface: list[dict[str, Any]] = []
+    for gy in range(grid):
+        y = float(field["width_m"]) * (gy + 0.5) / grid
+        for gx in range(grid):
+            x = float(field["length_m"]) * (gx + 0.5) / grid
+            n, p, k = idw(samples, x, y, "n_frg"), idw(samples, x, y, "p_frg"), idw(samples, x, y, "k_frg")
+            classes = soil_classes(n or 0, p or 0, k or 0, profile["crop"])
+            product_rates = {key: product_recommendation(profile, classes[FERTILIZER_PRODUCTS[key]["nutrient"]], key) for key in FERTILIZER_PRODUCTS}
+            if profile["crop"] == "Lentil" and bool(field.get("rhizobium_used", 0)):
+                product_rates["Urea"] = {"applicable": True, "status_class": "Optimum", "nutrient": "N", "nutrient_min_kg_ha": 0.0, "nutrient_max_kg_ha": 0.0, "min_kg_ha": 0.0, "max_kg_ha": 0.0, "product_label_bn": "ইউরিয়া", "note_bn": "রাইজোবিয়াম ইনোকুল্যান্ট ব্যবহার নির্বাচিত; FRG-2024 অনুযায়ী N সার প্রয়োগ নয়।"}
+            surface.append({"x_m": round(x, 3), "y_m": round(y, 3), "N": n, "P": p, "K": k,
+                            "classes": classes, "product_rates": product_rates})
+    return surface
+
+
+def prescription_totals(surface: list[dict[str, Any]], area_ha: float) -> dict[str, Any]:
+    totals: dict[str, Any] = {}
+    if not surface: return totals
+    cell_area = area_ha / len(surface) if area_ha > 0 else 0.0
+    for key, product in FERTILIZER_PRODUCTS.items():
+        valid = [point["product_rates"][key] for point in surface if point["product_rates"][key]["applicable"]]
+        valid_area = len(valid) * cell_area
+        total_min = sum(float(item["min_kg_ha"]) * cell_area for item in valid)
+        total_max = sum(float(item["max_kg_ha"]) * cell_area for item in valid)
+        coverage = len(valid) / len(surface) * 100.0
+        totals[key] = {"label_bn": product["label_bn"], "nutrient": product["nutrient"],
+                       "coverage_percent": coverage, "rated_area_ha": valid_area,
+                       "unrated_area_ha": max(0.0, area_ha - valid_area), "total_min_kg": total_min,
+                       "total_max_kg": total_max, "area_total_complete": coverage >= 99.999,
+                       "average_min_kg_ha": total_min / valid_area if valid_area else None,
+                       "average_max_kg_ha": total_max / valid_area if valid_area else None}
+    return totals
+
+
+def build_recommendation(field: dict[str, Any], samples: list[dict[str, Any]], profile: dict[str, Any], surface: list[dict[str, Any]]) -> dict[str, Any]:
+    area_ha = float(field["length_m"]) * float(field["width_m"]) / 10000.0
+    # Use equal-area interpolated cells to describe the whole field surface, not
+    # just an unweighted list of sample records. The sample readings remain the
+    # source inputs; the output is still preliminary IDW, not lab validation.
+    if surface:
+        n_values = [float(point["N"]) for point in surface if point.get("N") is not None]
+        p_values = [float(point["P"]) for point in surface if point.get("P") is not None]
+        k_values = [float(point["K"]) for point in surface if point.get("K") is not None]
+    else:
+        n_values = [float(item["n_frg"]) for item in samples]
+        p_values = [float(item["p_frg"]) for item in samples]
+        k_values = [float(item["k_frg"]) for item in samples]
+    n_avg = sum(n_values) / len(n_values)
+    p_avg = sum(p_values) / len(p_values)
+    k_avg = sum(k_values) / len(k_values)
+    classes = soil_classes(n_avg, p_avg, k_avg, profile["crop"])
+    response = critical_limit_response(n_avg, p_avg, k_avg, profile["crop"])
+    goal, tolerance = float(profile["yield_goal_t_ha"]), float(profile["yield_tolerance_t_ha"])
+    goal_min, goal_max = max(0.0, goal - tolerance), goal + tolerance
+    yield_comparison: dict[str, Any] = {
+        "yield_goal_t_ha": goal, "yield_tolerance_t_ha": tolerance,
+        "after_fertilizer_min_t_ha": goal_min, "after_fertilizer_max_t_ha": goal_max,
+        "after_fertilizer_min_field_kg": goal_min * area_ha * 1000,
+        "after_fertilizer_max_field_kg": goal_max * area_ha * 1000,
+        "before_range_available": response["unfertilized_yield_percent_range"] is not None,
+        "before_percent_range": response["unfertilized_yield_percent_range"],
+        "limiting_nutrient": response["limiting_nutrient"],
+        "critical_limit_percent": response["critical_limit_percent"], "response_class": response["response_class"],
+    }
+    if response["unfertilized_yield_percent_range"] is not None:
+        low_pct, high_pct = response["unfertilized_yield_percent_range"]
+        before_min, before_max = goal * low_pct / 100.0, goal * high_pct / 100.0
+        yield_comparison.update({"before_fertilizer_min_t_ha": before_min, "before_fertilizer_max_t_ha": before_max,
+                                 "before_fertilizer_min_field_kg": before_min * area_ha * 1000,
+                                 "before_fertilizer_max_field_kg": before_max * area_ha * 1000})
+    extra = []
+    for nutrient, label in [("S", "সালফার (S)"), ("Mg", "ম্যাগনেসিয়াম (Mg)"), ("Zn", "জিঙ্ক (Zn)"), ("B", "বোরন (B)"), ("Mo", "মলিবডেনাম (Mo)")]:
+        if nutrient in profile.get("nutrients", {}):
+            extra.append({"nutrient": nutrient, "label_bn": label, "note_bn": "সংযুক্ত ESP32 সেন্সর এই nutrient সরাসরি মাপে না; laboratory soil test ছাড়া নির্দিষ্ট মাত্রা নির্বাচন করা হয়নি।"})
+    official_variety = str(field.get("variety") or "").split("|", 1)[-1]
+    crop_labels_bn = {"Rice": "ধান", "Wheat": "গম", "Lentil": "মসুর ডাল", "Onion": "পেঁয়াজ"}
+    season_labels_bn = {"Boro": "বোরো", "Aus": "আউশ", "Aman": "আমন", "Rabi": "রবি", "Summer": "গ্রীষ্মকালীন"}
+    variety_bn = cultivar_label_bn(official_variety) if "cultivar_label_bn" in globals() else official_variety
+    return {
+        "status": "preliminary", "rhizobium_used": bool(field.get("rhizobium_used", 0)), "crop": profile["crop"], "crop_label_bn": crop_labels_bn.get(profile["crop"], profile["crop"]),
+        "variety": official_variety, "variety_bn": variety_bn,
+        "season": field.get("season"), "season_label_bn": season_labels_bn.get(str(field.get("season") or ""), field.get("season")), "source_page": profile["source_page"],
+        "yield_goal_display_bn": f"{goal:g} ± {tolerance:g} টন/হেক্টর", "field_area_ha": area_ha,
+        "field_area_m2": area_ha * 10000, "sample_count": len(samples),
+        "average_frg": {"N": n_avg, "P": p_avg, "K": k_avg}, "classes": classes,
+        "limiting_response": response, "yield_comparison": yield_comparison,
+        "fertilizer_totals": prescription_totals(surface, area_ha),
+        "organic_fertilizer_t_ha": profile.get("organic_fertilizer_t_ha"),
+        "organic_fertilizer_field_t": profile.get("organic_fertilizer_t_ha") * area_ha if profile.get("organic_fertilizer_t_ha") is not None else None,
+        "extra_nutrients_not_measured": extra, "application_bn": profile.get("application_bn", []),
+        "limitations_bn": [
+            "এটি FRG-2024-এর সারণি ও ESP32-এর সংরক্ষিত পাঠ থেকে তৈরি প্রাথমিক হিসাব; সেন্সরের মান পরীক্ষাগারের soil-test result-এর সঙ্গে যাচাই করা হয়নি।",
+            "ফসলের yield goal লক্ষ্য, নিশ্চিত yield prediction নয়। বাস্তব ফলন জানতে একই জমির harvest data, পানি, আবহাওয়া, রোগবালাই ও ব্যবস্থাপনার তথ্য প্রয়োজন।",
+            "FRG-2024 crop table-এ High / Very High শ্রেণির জন্য আলাদা সারমাত্রা নেই; ওই অঞ্চলগুলো map-এ ধূসর দেখানো হয়েছে এবং মোট পরিমাণে অন্তর্ভুক্ত নয়।",
+            "S, Mg, Zn, B ও Mo connected sensor-এ মাপা হয় না; laboratory soil test ছাড়া এদের নির্দিষ্ট পরিমাণ স্বয়ংক্রিয়ভাবে নির্ধারণ করা হয়নি।",
+        ]}
 
 class SensorReading(BaseModel):
     air_temp: float = 0
@@ -217,6 +385,7 @@ class FieldCreate(BaseModel):
     variety: str = ""
     season: str = ""
     yield_goal: str = ""
+    rhizobium_used: bool = False
 
 
 class SampleCreate(BaseModel):
@@ -250,11 +419,65 @@ class FertilizerRequest(BaseModel):
     variety: str = ""
     season: str = ""
     yield_goal: str = ""
+    rhizobium_used: bool = False
 
 
 @app.get("/")
 def home() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html")
+
+
+def cultivar_label_bn(name: str) -> str:
+    """Readable Bengali cultivar text while keeping official name as metadata."""
+    import re
+    def bn_digits(value: str) -> str:
+        return value.translate(str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯"))
+    if name.startswith("BRRI dhan"):
+        return "বিআরআরআই ধান " + bn_digits(name.removeprefix("BRRI dhan"))
+    if name.startswith("Bangabandhu dhan"):
+        return "বঙ্গবন্ধু ধান " + bn_digits(name.removeprefix("Bangabandhu dhan"))
+    if name.startswith("Binadhan-"):
+        return "বিনাধান " + bn_digits(name.removeprefix("Binadhan-"))
+    if name.startswith("BARI Gom "):
+        return "বারি গম " + bn_digits(name.removeprefix("BARI Gom "))
+    if name.startswith("BWMRI Gom "):
+        return "বিডব্লিউএমআরআই গম " + bn_digits(name.removeprefix("BWMRI Gom "))
+    if name.startswith("BARI Masur-"):
+        return "বারি মসুর " + bn_digits(name.removeprefix("BARI Masur-"))
+    if name.startswith("Binamasur-"):
+        return "বিনামসুর " + bn_digits(name.removeprefix("Binamasur-"))
+    if name.startswith("BARI Peyaz-"):
+        return "বারি পেঁয়াজ " + bn_digits(name.removeprefix("BARI Peyaz-"))
+    if name.startswith("BR") and name[2:].isdigit():
+        return "বিআর " + bn_digits(name[2:])
+    if name.startswith("BR") and name[2:].replace("RI", "").isdigit():
+        return "বিআর " + bn_digits(name[2:])
+    if name.startswith("Kataribhog"):
+        return "কাতারিভোগ"
+    if name == "Kalijira": return "কালিজিরা"
+    if name == "Chinigura": return "চিনিগুঁড়া"
+    return name
+
+
+@app.get("/api/frg/options")
+def frg_options() -> dict[str, Any]:
+    labels = {"Rice": "ধান", "Wheat": "গম", "Lentil": "মসুর ডাল", "Onion": "পেঁয়াজ"}
+    seasons = {"Boro": "বোরো", "Aus": "আউশ", "Aman": "আমন", "Rabi": "রবি", "Summer": "গ্রীষ্মকালীন"}
+    profiles = []
+    for key, profile in FRG_PROFILES.items():
+        profiles.append({
+            "key": key, "crop": profile["crop"], "crop_label_bn": labels[profile["crop"]],
+            "season": profile["season"], "season_label_bn": seasons[profile["season"]],
+            "yield_goal_t_ha": profile["yield_goal_t_ha"],
+            "yield_tolerance_t_ha": profile["yield_tolerance_t_ha"],
+            "source_page": profile["source_page"],
+            "varieties": [{"value": f"{key}|{cultivar}", "official_name": cultivar,
+                           "label_bn": cultivar_label_bn(cultivar)} for cultivar in profile["varieties"]],
+        })
+    return {"crops": [{"key": "Rice", "label_bn": "ধান"}, {"key": "Wheat", "label_bn": "গম"},
+                       {"key": "Lentil", "label_bn": "মসুর ডাল"}, {"key": "Onion", "label_bn": "পেঁয়াজ"}],
+            "profiles": profiles,
+            "disclaimer_bn": "ফলন লক্ষ্য ও সারমাত্রা FRG-2024 সারণি থেকে; সেন্সরের মান পরীক্ষাগারের soil-test value-এর সঙ্গে যাচাই করা প্রয়োজন।"}
 
 
 @app.get("/api/health")
@@ -368,11 +591,17 @@ def ingest_reading(payload: SensorReading) -> dict[str, Any]:
 
 @app.post("/api/fields")
 def create_field(payload: FieldCreate) -> dict[str, Any]:
+    if payload.crop not in {"Rice", "Wheat", "Lentil", "Onion"}:
+        raise HTTPException(status_code=422, detail="শুধু ধান, গম, মসুর ডাল বা পেঁয়াজ নির্বাচন করুন।")
+    if not payload.season or not payload.variety:
+        raise HTTPException(status_code=422, detail="FRG-2024 তালিকা থেকে মৌসুম ও জাত নির্বাচন করুন।")
+    if not resolve_profile(payload.crop, payload.variety, payload.season):
+        raise HTTPException(status_code=422, detail="নির্বাচিত ফসল, মৌসুম ও জাতের জন্য FRG-2024 সারণি পাওয়া যায়নি।")
     conn = db()
     cur = conn.execute(
         """
-        INSERT INTO fields(name, length_m, width_m, spacing_m, crop, variety, season, yield_goal, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO fields(name, length_m, width_m, spacing_m, crop, variety, season, yield_goal, rhizobium_used, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             payload.name,
@@ -383,6 +612,7 @@ def create_field(payload: FieldCreate) -> dict[str, Any]:
             payload.variety,
             payload.season,
             payload.yield_goal,
+            int(payload.rhizobium_used),
             now_iso(),
         ),
     )
@@ -563,35 +793,40 @@ def get_grid(field_id: int) -> dict[str, Any]:
 @app.post("/api/fertilizer/calculate")
 def calculate_fertilizer(payload: FertilizerRequest) -> dict[str, Any]:
     conn = db()
-    field = conn.execute("SELECT * FROM fields WHERE id = ?", (payload.field_id,)).fetchone()
-    samples = conn.execute("SELECT * FROM samples WHERE field_id = ? ORDER BY point_no", (payload.field_id,)).fetchall()
+    field_row = conn.execute("SELECT * FROM fields WHERE id = ?", (payload.field_id,)).fetchone()
+    sample_rows = conn.execute("SELECT * FROM samples WHERE field_id = ? ORDER BY point_no", (payload.field_id,)).fetchall()
     conn.close()
-    if not field:
+    if not field_row:
         raise HTTPException(status_code=404, detail="Field not found")
-    if not samples:
+    if not sample_rows:
         raise HTTPException(status_code=400, detail="No soil samples saved for this field")
-
-    n_avg = sum(s["n_frg"] for s in samples) / len(samples)
-    p_avg = sum(s["p_frg"] for s in samples) / len(samples)
-    k_avg = sum(s["k_frg"] for s in samples) / len(samples)
-    classes = soil_classes(n_avg, p_avg, k_avg)
-
-    # This section intentionally does NOT fabricate crop-specific FRG dose numbers.
-    # It returns the measured fertility status and nutrient targets as inputs to the
-    # separate FRG table that will be populated from the user's guidebook.
-    result = {
-        "status": "FRG_TABLE_REQUIRED",
-        "message": "Crop-specific FRG-2024 fertilizer dose table is not hard-coded until the guidebook table is entered/verified.",
-        "field_area_ha": field["length_m"] * field["width_m"] / 10000.0,
-        "sample_count": len(samples),
-        "average_frg": {"N": n_avg, "P": p_avg, "K": k_avg},
-        "classes": classes,
-        "fertilizer_sources": FERTILIZERS,
-        "crop": payload.crop,
-        "variety": payload.variety,
-        "season": payload.season,
-        "yield_goal": payload.yield_goal,
-    }
+    field = dict(field_row)
+    samples = [dict(row) for row in sample_rows]
+    expected_x, expected_y = grid_axes(float(field["length_m"]), float(field["width_m"]), float(field["spacing_m"]))
+    required_points = len(expected_x) * len(expected_y)
+    if len(samples) < required_points:
+        raise HTTPException(
+            status_code=400,
+            detail=f"পুরো জমির বিশ্লেষণের আগে সব নমুনা পয়েন্ট সংরক্ষণ করুন। সংরক্ষিত {len(samples)} / {required_points}টি।",
+        )
+    crop = payload.crop or field.get("crop", "")
+    variety = payload.variety or field.get("variety", "")
+    season = payload.season or field.get("season", "")
+    profile = resolve_profile(crop, variety, season)
+    if not profile:
+        raise HTTPException(status_code=422, detail="এই ফসল, মৌসুম ও জাতের জন্য যাচাইকৃত FRG-2024 সারণি পাওয়া যায়নি।")
+    field["crop"], field["variety"], field["season"] = crop, variety, season
+    field["rhizobium_used"] = int(payload.rhizobium_used)
+    conn = db()
+    conn.execute("UPDATE fields SET rhizobium_used = ?, crop = ?, variety = ?, season = ?, yield_goal = ? WHERE id = ?", (int(payload.rhizobium_used), crop, variety, season, str(profile["yield_goal_t_ha"]), payload.field_id))
+    conn.commit()
+    conn.close()
+    surface = build_vra_surface(field, samples, profile, grid=40)
+    result = build_recommendation(field, samples, profile, surface)
+    result["profile_key"] = next((key for key, item in FRG_PROFILES.items() if item is profile), None)
+    result["map_resolution"] = 40
+    result["spatial_validation"] = spatial_cross_validation(samples)
+    result["map_legend"] = build_map_legend(profile, bool(field.get("rhizobium_used", 0)))
     return result
 
 
@@ -614,29 +849,80 @@ def idw(samples: list[dict[str, float]], x: float, y: float, key: str, power: fl
     return weighted / weights if weights else None
 
 
+def spatial_cross_validation(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Leave-one-out IDW validation. This is only a diagnostic with sparse points."""
+    result: dict[str, Any] = {
+        "method": "IDW (power=2) + leave-one-out cross-validation",
+        "sample_count": len(samples),
+        "valid": len(samples) >= 4,
+        "metrics": {},
+        "note_bn": "কমপক্ষে ৪টি পৃথক নমুনা পয়েন্ট না থাকলে cross-validation পরিসংখ্যান নির্ভরযোগ্যভাবে দেখানো হয় না।",
+    }
+    if len(samples) < 4:
+        return result
+    for key, label in (("n_frg", "N"), ("p_frg", "P"), ("k_frg", "K")):
+        actual: list[float] = []
+        predicted: list[float] = []
+        for index, holdout in enumerate(samples):
+            training = samples[:index] + samples[index + 1:]
+            estimate = idw(training, float(holdout["x_m"]), float(holdout["y_m"]), key)
+            if estimate is None:
+                continue
+            actual.append(float(holdout[key]))
+            predicted.append(float(estimate))
+        if not actual:
+            continue
+        errors = [p - a for p, a in zip(predicted, actual)]
+        mae = sum(abs(e) for e in errors) / len(errors)
+        rmse = math.sqrt(sum(e * e for e in errors) / len(errors))
+        mean_actual = sum(actual) / len(actual)
+        ss_tot = sum((a - mean_actual) ** 2 for a in actual)
+        ss_res = sum(e * e for e in errors)
+        result["metrics"][label] = {
+            "mae": mae,
+            "rmse": rmse,
+            "r2": (1 - ss_res / ss_tot) if ss_tot > 1e-12 else None,
+            "n": len(actual),
+        }
+    result["valid"] = len(result["metrics"]) == 3
+    result["note_bn"] = "এটি সংরক্ষিত নমুনায় leave-one-out error; ঘন নমুনা ও পরীক্ষাগারের সঙ্গে sensor calibration ছাড়া একে মাঠজুড়ে নিশ্চিত accuracy ধরা যাবে না।"
+    return result
+
+
 @app.get("/api/vra/{field_id}")
-def vra(field_id: int, grid: int = 24) -> dict[str, Any]:
+def vra(field_id: int, grid: int = 40) -> dict[str, Any]:
     conn = db()
-    field = conn.execute("SELECT * FROM fields WHERE id = ?", (field_id,)).fetchone()
-    rows = conn.execute("SELECT * FROM samples WHERE field_id = ? ORDER BY point_no", (field_id,)).fetchall()
+    field_row = conn.execute("SELECT * FROM fields WHERE id = ?", (field_id,)).fetchone()
+    sample_rows = conn.execute("SELECT * FROM samples WHERE field_id = ? ORDER BY point_no", (field_id,)).fetchall()
     conn.close()
-    if not field:
+    if not field_row:
         raise HTTPException(status_code=404, detail="Field not found")
-    samples = [dict(r) for r in rows]
-    grid = max(8, min(50, int(grid)))
-    surface: list[dict[str, Any]] = []
-    for gy in range(grid):
-        y = field["width_m"] * (gy + 0.5) / grid
-        for gx in range(grid):
-            x = field["length_m"] * (gx + 0.5) / grid
-            surface.append({
-                "x_m": round(x, 3),
-                "y_m": round(y, 3),
-                "N": idw(samples, x, y, "n_frg"),
-                "P": idw(samples, x, y, "p_frg"),
-                "K": idw(samples, x, y, "k_frg"),
-            })
-    return {"field": dict(field), "samples": samples, "surface": surface}
+    field = dict(field_row)
+    samples = [dict(row) for row in sample_rows]
+    profile = resolve_profile(field.get("crop", ""), field.get("variety", ""), field.get("season", ""))
+    actual_grid = max(8, min(50, int(grid)))
+    xs, ys = grid_axes(float(field["length_m"]), float(field["width_m"]), float(field["spacing_m"]))
+    required_points = len(xs) * len(ys)
+    progress = {"required_points": required_points, "saved_points": len(samples),
+                "complete": len(samples) >= required_points,
+                "missing_points": max(0, required_points - len(samples))}
+    if not samples or not profile:
+        return {"field": field, "samples": samples, "surface": [], "grid_resolution": actual_grid,
+                "sampling_progress": progress, "recommendation": None, "legend": {}, "spatial_validation": spatial_cross_validation(samples)}
+    surface = build_vra_surface(field, samples, profile, grid=actual_grid)
+    recommendation = build_recommendation(field, samples, profile, surface) if progress["complete"] else None
+    return {
+        "field": field,
+        "samples": samples,
+        "surface": surface,
+        "sampling_progress": progress,
+        "spatial_validation": spatial_cross_validation(samples),
+        "grid_resolution": actual_grid,
+        "profile_key": next((key for key, item in FRG_PROFILES.items() if item is profile), None),
+        "crop_profile": {"crop": profile["crop"], "season": profile["season"], "yield_goal_t_ha": profile["yield_goal_t_ha"], "yield_tolerance_t_ha": profile["yield_tolerance_t_ha"], "source_page": profile["source_page"]},
+        "recommendation": recommendation,
+        "legend": build_map_legend(profile, bool(field.get("rhizobium_used", 0))),
+    }
 
 
 @app.get("/api/history")
@@ -675,47 +961,114 @@ def report_pdf(field_id: int):
 
     import io
 
-    n_avg = sum(s["n_frg"] for s in samples) / len(samples) if samples else 0
-    p_avg = sum(s["p_frg"] for s in samples) / len(samples) if samples else 0
-    k_avg = sum(s["k_frg"] for s in samples) / len(samples) if samples else 0
-    classes = soil_classes(n_avg, p_avg, k_avg)
+    field = dict(field)
+    sample_dicts = [dict(sample) for sample in samples]
+    n_avg = sum(s["n_frg"] for s in sample_dicts) / len(sample_dicts) if sample_dicts else 0
+    p_avg = sum(s["p_frg"] for s in sample_dicts) / len(sample_dicts) if sample_dicts else 0
+    k_avg = sum(s["k_frg"] for s in sample_dicts) / len(sample_dicts) if sample_dicts else 0
+    classes = soil_classes(n_avg, p_avg, k_avg, str(field.get("crop") or ""))
+    profile = resolve_profile(str(field.get("crop") or ""), str(field.get("variety") or ""), str(field.get("season") or ""))
+    xs, ys = grid_axes(float(field["length_m"]), float(field["width_m"]), float(field["spacing_m"]))
+    required_points = len(xs) * len(ys)
+    complete = bool(profile and sample_dicts and len(sample_dicts) >= required_points)
+    recommendation = None
+    if complete:
+        surface = build_vra_surface(field, sample_dicts, profile, grid=40)
+        recommendation = build_recommendation(field, sample_dicts, profile, surface)
+        n_avg = recommendation["average_frg"]["N"]
+        p_avg = recommendation["average_frg"]["P"]
+        k_avg = recommendation["average_frg"]["K"]
+        classes = recommendation["classes"]
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
     styles = getSampleStyleSheet()
+    official_variety = str(field.get("variety") or "").split("|", 1)[-1]
     story = [
-        Paragraph("Smart Farming — Field Soil & VRA Report", styles["Title"]),
+        Paragraph("Smart Farming — FRG-2024 Field & VRA Report", styles["Title"]),
         Spacer(1, 12),
-        Paragraph(f"Field: {field['name']}", styles["Normal"]),
-        Paragraph(f"Area: {field['length_m'] * field['width_m'] / 10000:.4f} ha", styles["Normal"]),
-        Paragraph(f"Crop / Variety: {field['crop']} / {field['variety']}", styles["Normal"]),
-        Paragraph(f"Season / Yield goal: {field['season']} / {field['yield_goal']}", styles["Normal"]),
+        Paragraph(f"Field: {field['name'] if str(field['name']).isascii() else f'Field {field_id}'}", styles["Normal"]),
+        Paragraph(f"Area: {field['length_m'] * field['width_m'] / 10000:.4f} ha ({field['length_m'] * field['width_m']:.2f} m2)", styles["Normal"]),
+        Paragraph(f"Crop / Variety: {field.get('crop') or 'Not selected'} / {official_variety or 'Not selected'}", styles["Normal"]),
+        Paragraph(f"Season: {field.get('season') or 'Not selected'}", styles["Normal"]),
+        Paragraph(f"Sampling points saved: {len(sample_dicts)} / {required_points} ({'complete' if len(sample_dicts) >= required_points else 'incomplete'})", styles["Normal"]),
         Paragraph(f"Generated: {now_iso()}", styles["Normal"]),
         Spacer(1, 16),
-        Paragraph("Average FRG-2024 interpretation inputs", styles["Heading2"]),
+        Paragraph("Field-wide FRG-2024 nutrient status (IDW area-weighted estimate when complete)", styles["Heading2"]),
         Spacer(1, 8),
     ]
-    data = [
-        ["N", f"{n_avg:.4f}", classes["N"]],
-        ["P", f"{p_avg:.4f}", classes["P"]],
-        ["K", f"{k_avg:.4f}", classes["K"]],
-    ]
-    tbl = Table([["Nutrient", "Value", "Class"]] + data, colWidths=[100, 120, 130])
+    nutrient_rows = [["Nutrient", "Value", "Class"],
+                     ["N", f"{n_avg:.4f}", classes["N"]],
+                     ["P", f"{p_avg:.4f}", classes["P"]],
+                     ["K", f"{k_avg:.4f}", classes["K"]]]
+    tbl = Table(nutrient_rows, colWidths=[100, 120, 170])
     tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#d8f0df")),
-        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-        ("ALIGN", (1,1), (-1,-1), "CENTER"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#d8f0df")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
     story.append(tbl)
     story.append(Spacer(1, 16))
-    story.append(Paragraph(
-        "Note: Crop-specific FRG-2024 fertilizer dose tables are not fabricated by this MVP. "
-        "They must be entered from the verified guidebook tables before issuing fertilizer quantities.",
-        styles["BodyText"],
-    ))
+
+    if recommendation:
+        story.append(Paragraph(f"FRG-2024 crop yield goal: {profile['yield_goal_t_ha']:.2f} ± {profile['yield_tolerance_t_ha']:.2f} t/ha", styles["Heading2"]))
+        y = recommendation["yield_comparison"]
+        if y["before_range_available"]:
+            before_text = (f"Guide-based no-fertilizer reference: {y['before_fertilizer_min_t_ha']:.2f}–"
+                           f"{y['before_fertilizer_max_t_ha']:.2f} t/ha; field equivalent "
+                           f"{y['before_fertilizer_min_field_kg']:.1f}–{y['before_fertilizer_max_field_kg']:.1f} kg.")
+        else:
+            before_text = "FRG Table 2 does not provide a numeric no-fertilizer yield band for this critical-limit category."
+        after_text = (f"FRG yield goal range (not guaranteed actual yield): {y['after_fertilizer_min_t_ha']:.2f}–"
+                      f"{y['after_fertilizer_max_t_ha']:.2f} t/ha; field equivalent "
+                      f"{y['after_fertilizer_min_field_kg']:.1f}–{y['after_fertilizer_max_field_kg']:.1f} kg.")
+        story.append(Paragraph(before_text, styles["BodyText"]))
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(after_text, styles["BodyText"]))
+        story.append(Spacer(1, 14))
+        story.append(Paragraph("Fertilizer products (FRG table ranges converted with Appendix-10 factors)", styles["Heading2"]))
+        product_rows = [["Product", "Average rate range (kg/ha)", "Field amount / rated coverage"]]
+        for key, item in recommendation["fertilizer_totals"].items():
+            if item["average_min_kg_ha"] is None:
+                rate_text = "Not rated from available data"
+            else:
+                rate_text = f"{item['average_min_kg_ha']:.1f}–{item['average_max_kg_ha']:.1f}"
+            total_text = f"{item['total_min_kg']:.2f}–{item['total_max_kg']:.2f} kg; {item['coverage_percent']:.1f}% area"
+            if item["unrated_area_ha"] > 0.000001:
+                total_text += f"; unrated {item['unrated_area_ha']:.4f} ha"
+            product_rows.append([key, rate_text, total_text])
+        product_table = Table(product_rows, colWidths=[110, 145, 195], repeatRows=1)
+        product_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#d8f0df")),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(product_table)
+        if recommendation["organic_fertilizer_t_ha"] is not None:
+            story.append(Spacer(1, 8))
+            story.append(Paragraph(f"Organic fertilizer from selected FRG profile: {recommendation['organic_fertilizer_t_ha']:.2f} t/ha; field total {recommendation['organic_fertilizer_field_t']:.3f} t.", styles["BodyText"]))
+        story.append(Spacer(1, 12))
+        story.append(Paragraph("Cautions", styles["Heading2"]))
+        caveats = [
+            "This is a preliminary FRG-2024 estimate from ESP32 readings; validate sensor units/calibration against laboratory soil analysis.",
+            "The FRG yield goal is not a guaranteed yield forecast. Actual yield depends on irrigation, weather, cultivar, pests/diseases and management.",
+            "No separate High/Very High crop-table dose is invented. Gray/unrated areas must not be interpreted as zero fertilizer requirement.",
+            "S, Mg, Zn, B and Mo are not directly measured by this connected sensor; use laboratory soil test before prescribing their specific rates.",
+        ]
+        for caveat in caveats:
+            story.append(Paragraph("• " + caveat, styles["BodyText"]))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(f"Source: BARC, Fertilizer Recommendation Guide-2024; crop table {profile['source_page']}; Appendix-8 soil-test classes; Appendix-10 conversion factors.", styles["BodyText"]))
+    else:
+        story.append(Paragraph("Full-field fertilizer and yield recommendation is not available yet. Save every generated sampling-grid point and select a crop, season and variety covered by the FRG-2024 profile. The current report only shows the available sample readings.", styles["BodyText"]))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("N/P/K class values are preliminary sensor-derived values; laboratory calibration is required before making a field prescription.", styles["BodyText"]))
+
     story.append(Spacer(1, 12))
-    story.append(Paragraph(f"Sampling points: {len(samples)}", styles["Normal"]))
+    story.append(Paragraph(f"Source sampling points saved: {len(sample_dicts)} of {required_points}", styles["Normal"]))
     doc.build(story)
     buffer.seek(0)
     return StreamingResponse(

@@ -4,8 +4,10 @@ const state = {
   fieldId: Number(localStorage.getItem('smartFarmingLastFieldId')) || null,
   grid: null,
   vra: null,
-  layer: 'N',
+  layer: 'Urea',
   selectedPoint: 1,
+  frgProfiles: [],
+  recommendation: null,
   latestLive: null,
   latestLiveReceivedAt: 0,
   selectedPointBaselineId: null,
@@ -374,12 +376,15 @@ async function createField() {
   if (!$('field-name').value.trim()) return flash('মাঠের নাম লিখুন।', 'error');
   if (!(length > 0 && width > 0 && spacing > 0)) return flash('দৈর্ঘ্য, প্রস্থ ও নমুনার ব্যবধান শূন্যের চেয়ে বেশি হতে হবে।', 'error');
   if (!$('field-crop').value) return flash('আগে ফসল নির্বাচন করুন।', 'error');
+  if (!$('field-season').value) return flash('ফসলের মৌসুম নির্বাচন করুন।', 'error');
+  if (!$('field-variety').value) return flash('FRG-2024 তালিকা থেকে জাত নির্বাচন করুন।', 'error');
   const estimatedPoints = Math.ceil(length / spacing) * Math.ceil(width / spacing);
   if (estimatedPoints > 500) return flash('এই ব্যবধানে ৫০০টির বেশি পয়েন্ট তৈরি হবে। নমুনার ব্যবধান বাড়ান।', 'error');
   const payload = {
     name: $('field-name').value.trim(), length_m: length, width_m: width, spacing_m: spacing,
     crop: $('field-crop').value, variety: $('field-variety').value,
-    season: $('field-season').value, yield_goal: $('field-yield').value
+    season: $('field-season').value, yield_goal: $('field-yield').value,
+    rhizobium_used: $('field-rhizobium').checked
   };
   state.pendingSample = null;
   const button = $('create-field'); button.disabled = true; button.textContent = 'মাঠ তৈরি হচ্ছে…';
@@ -471,75 +476,236 @@ $('capture-point').addEventListener('click', async () => {
 });
 
 $('run-calculation').addEventListener('click', async () => {
-  if (!state.fieldId) return flash('আগে মাঠ তৈরি করুন।', 'error');
-  if (!$('field-crop').value) return flash('ফসল নির্বাচন করুন।', 'error');
-  if (!state.grid?.points.some((point) => point.saved)) return flash('বিশ্লেষণের আগে অন্তত একটি পয়েন্টের সেন্সর তথ্য সংরক্ষণ করুন।', 'error');
+  if (!state.fieldId || !state.grid) return flash('আগে মাঠ ও নমুনা গ্রিড তৈরি করুন।', 'error');
+  if (!$('field-crop').value || !$('field-season').value || !$('field-variety').value) return flash('ফসল, মৌসুম ও জাত নির্বাচন করুন।', 'error');
+  const savedCount = state.grid.points.filter((point) => point.saved).length;
+  const requiredCount = state.grid.points.length;
+  if (savedCount < requiredCount) {
+    return flash(`পুরো জমির বিশ্লেষণের আগে সব পয়েন্টের reading save করুন: ${savedCount}/${requiredCount}টি সম্পন্ন।`, 'error');
+  }
+  const button = $('run-calculation');
+  button.disabled = true; button.textContent = 'পুরো জমির তথ্য বিশ্লেষণ হচ্ছে…';
   try {
-    const data = await api('/api/fertilizer/calculate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ field_id: state.fieldId, crop: $('field-crop').value, variety: $('field-variety').value, season: $('field-season').value, yield_goal: $('field-yield').value }) });
-    $('calc-result').innerHTML = `<strong>গড় মাটির মান</strong><br>N: ${fmt(data.average_frg.N, 4)} (${translateClass(data.classes.N)}) • P: ${fmt(data.average_frg.P, 2)} (${translateClass(data.classes.P)}) • K: ${fmt(data.average_frg.K, 4)} (${translateClass(data.classes.K)})<br><span class="muted">${fmtCoord(data.sample_count, 0)}টি সংরক্ষিত পয়েন্ট। নির্দিষ্ট সারমাত্রার জন্য যাচাইকৃত FRG-2024 ফসলভিত্তিক তালিকা প্রয়োজন।</span>`;
+    const data = await api('/api/fertilizer/calculate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        field_id: state.fieldId,
+        crop: $('field-crop').value,
+        variety: $('field-variety').value,
+        season: $('field-season').value,
+        yield_goal: $('field-yield').value,
+        rhizobium_used: $('field-rhizobium').checked
+      })
+    });
+    state.recommendation = data;
     $('vra-field-id').value = state.fieldId;
     showPage('vra');
     await loadVRA();
+    flash('পুরো জমির সংরক্ষিত নমুনা থেকে FRG-2024 ভিত্তিক প্রাথমিক সার পরিকল্পনা তৈরি হয়েছে।', 'success');
   } catch (error) { flash(error.message, 'error'); }
+  finally { button.disabled = false; button.textContent = 'পুরো জমির সার ও ফলন পরিকল্পনা তৈরি করুন'; }
 });
 
 async function loadVRA() {
   const id = Number($('vra-field-id').value);
   if (!id) return flash('মাঠের ID লিখুন।', 'error');
   try {
-    state.vra = await api(`/api/vra/${id}`);
+    state.vra = await api(`/api/vra/${id}?grid=40`);
+    state.recommendation = state.vra.recommendation || state.recommendation;
     drawVRA();
+    renderVraLegend();
     renderPoints();
-    if (!state.vra.samples.length) flash('এই মাঠে এখনো কোনো নমুনা সংরক্ষণ করা হয়নি।', 'info');
+    renderRecommendation(state.vra.recommendation);
+    const progress = state.vra.sampling_progress;
+    if (progress && !progress.complete) {
+      flash(`এখনো পুরো মাঠের নমুনা সম্পূর্ণ হয়নি: ${progress.saved_points}/${progress.required_points}টি। সম্পূর্ণ prescription-এর আগে সব point save করুন।`, 'info');
+    } else if (!state.vra.samples.length) {
+      flash('এই মাঠে এখনো কোনো নমুনা সংরক্ষণ করা হয়নি।', 'info');
+    }
   } catch (error) { flash(error.message, 'error'); }
 }
 $('load-vra').addEventListener('click', loadVRA);
 document.querySelectorAll('.chip').forEach((button) => button.addEventListener('click', () => {
   document.querySelectorAll('.chip').forEach((item) => item.classList.remove('active'));
-  button.classList.add('active'); state.layer = button.dataset.layer; drawVRA();
+  button.classList.add('active');
+  state.layer = button.dataset.layer;
+  drawVRA();
+  renderVraLegend();
 }));
-function colorFor(value, min, max) {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return 'rgba(160,170,165,.30)';
-  const t = (Number(value) - min) / (max - min || 1);
-  const stops = ['#1d7a52', '#47a36b', '#8bcf8d', '#f0e97c', '#efae5c', '#d94a44'];
-  const scaled = Math.max(0, Math.min(stops.length - 1, t * (stops.length - 1)));
-  const index = Math.min(stops.length - 2, Math.floor(scaled));
-  return stops[index];
+
+const CLASS_COLORS = {
+  'Optimum': '#238653',
+  'Medium': '#d7d848',
+  'Low': '#ee9b38',
+  'Very Low': '#d93632',
+  'High': '#b9c2bd',
+  'Very High': '#7b8782',
+  'No Data': '#d9dfdc'
+};
+const PRODUCT_BN = { Urea: 'ইউরিয়া', TSP: 'টিএসপি', MOP: 'এমওপি (পটাশ)' };
+function productRateForPoint(point) {
+  return point?.product_rates?.[state.layer] || null;
 }
 function drawVRA() {
   const canvas = $('vra-canvas');
+  if (!canvas) return;
   const context = canvas.getContext('2d');
-  context.clearRect(0, 0, canvas.width, canvas.height);
+  const W = canvas.width, H = canvas.height;
+  context.clearRect(0, 0, W, H);
+  context.fillStyle = '#eef8f2';
+  context.fillRect(0, 0, W, H);
   if (!state.vra) return;
+
   const field = state.vra.field;
-  if (!state.vra.samples.length) {
-    context.fillStyle = '#355b49'; context.font = 'bold 28px "Noto Sans Bengali", sans-serif';
-    context.fillText('মানচিত্র দেখতে আগে নমুনা সংরক্ষণ করুন', 55, 85);
+  const samples = state.vra.samples || [];
+  const surface = state.vra.surface || [];
+  const grid = Number(state.vra.grid_resolution) || 40;
+  if (!samples.length || !surface.length) {
+    context.fillStyle = '#355b49'; context.font = 'bold 27px "Noto Sans Bengali", sans-serif';
+    context.fillText('মানচিত্র তৈরির আগে অন্তত একটি নমুনা সংরক্ষণ করুন', 48, 75);
     return;
   }
-  const values = state.vra.surface.map((point) => point[state.layer]).filter((value) => value !== null && value !== undefined).map(Number);
-  const min = values.length ? Math.min(...values) : 0;
-  const max = values.length ? Math.max(...values) : 1;
-  const cols = 24, rows = 24;
-  const cellW = canvas.width / cols, cellH = canvas.height / rows;
-  state.vra.surface.forEach((point, index) => {
-    const gx = index % cols, gy = Math.floor(index / cols);
-    context.fillStyle = colorFor(point[state.layer], min, max);
-    context.fillRect(gx * cellW, canvas.height - (gy + 1) * cellH, cellW + 1, cellH + 1);
+
+  // Draw IDW-estimated fertilizer-rate zones; colour is FRG status class, not a random gradient.
+  const cellW = W / grid, cellH = H / grid;
+  surface.forEach((point, index) => {
+    const gx = index % grid;
+    const gy = Math.floor(index / grid);
+    const rate = productRateForPoint(point);
+    const color = !rate || !rate.applicable ? '#d9dfdc' : (CLASS_COLORS[rate.status_class] || '#d9dfdc');
+    context.fillStyle = color;
+    context.fillRect(gx * cellW, H - (gy + 1) * cellH, Math.ceil(cellW + 0.5), Math.ceil(cellH + 0.5));
   });
-  context.strokeStyle = '#145f42'; context.lineWidth = 5; context.strokeRect(0, 0, canvas.width, canvas.height);
-  state.vra.samples.forEach((sample) => {
-    const px = (sample.x_m / field.length_m) * canvas.width;
-    const py = canvas.height - (sample.y_m / field.width_m) * canvas.height;
-    context.fillStyle = '#fff'; context.beginPath(); context.arc(px, py, 9, 0, Math.PI * 2); context.fill();
-    context.strokeStyle = '#0b5b3d'; context.lineWidth = 3; context.stroke();
-    context.fillStyle = '#123'; context.font = 'bold 13px sans-serif'; context.fillText(pointId(sample.point_no), px + 12, py + 5);
+
+  // Field boundary and subtle frame.
+  context.strokeStyle = '#145f42'; context.lineWidth = 5;
+  context.strokeRect(2.5, 2.5, W - 5, H - 5);
+
+  // Sampling coordinates. White/green circles represent actual saved samples.
+  samples.forEach((sample) => {
+    const px = (Number(sample.x_m) / Number(field.length_m)) * W;
+    const py = H - (Number(sample.y_m) / Number(field.width_m)) * H;
+    context.beginPath(); context.arc(px, py, 9, 0, Math.PI * 2);
+    context.fillStyle = '#ffffff'; context.fill();
+    context.lineWidth = 3; context.strokeStyle = '#0b5b3d'; context.stroke();
+    const tag = pointId(sample.point_no);
+    context.font = 'bold 15px sans-serif';
+    const tw = context.measureText(tag).width + 14;
+    context.fillStyle = '#ffffff'; context.fillRect(px + 12, py - 13, tw, 25);
+    context.fillStyle = '#143b2b'; context.fillText(tag, px + 19, py + 5);
   });
-  context.fillStyle = '#fff'; context.fillRect(12, 12, 250, 52);
-  context.fillStyle = '#123'; context.font = 'bold 20px "Noto Sans Bengali", sans-serif';
-  const layerNames = { N: 'নাইট্রোজেন', P: 'ফসফরাস', K: 'পটাশিয়াম' };
-  context.fillText(`${layerNames[state.layer]} • আনুমানিক মান`, 24, 45);
+
+  // Title band with unit/rate context.
+  context.font = 'bold 22px "Noto Sans Bengali", sans-serif';
+  const title = `${PRODUCT_BN[state.layer]} • IDW • ${fmtCoord(field.length_m)}×${fmtCoord(field.width_m)} মি • kg/ha`;
+  const titleW = Math.min(W - 30, context.measureText(title).width + 30);
+  context.fillStyle = '#ffffff'; context.fillRect(14, 14, titleW, 46);
+  context.fillStyle = '#163e2d'; context.fillText(title, 27, 44);
+
+  // Sampling progress note in the bottom margin.
+  const progress = state.vra.sampling_progress;
+  if (progress && !progress.complete) {
+    const note = `নমুনা ${progress.saved_points}/${progress.required_points} • সম্পূর্ণ map নয়`;
+    context.font = 'bold 17px "Noto Sans Bengali", sans-serif';
+    const nw = context.measureText(note).width + 20;
+    context.fillStyle = '#ffffff'; context.fillRect(W - nw - 15, H - 43, nw, 29);
+    context.fillStyle = '#8b3c2e'; context.fillText(note, W - nw - 5, H - 23);
+  }
 }
+
+function renderVraLegend() {
+  const container = $('vra-legend');
+  if (!container) return;
+  const entries = state.vra?.legend?.[state.layer] || [];
+  if (!entries.length) {
+    container.innerHTML = '<p class="muted">সারমাত্রার legend দেখাতে মাঠ ও ফসল নির্বাচন করে বিশ্লেষণ করুন।</p>';
+    return;
+  }
+  const title = PRODUCT_BN[state.layer] || state.layer;
+  container.innerHTML = `<div class="legend-heading"><strong>${escapeHtml(title)} — রঙের অর্থ ও মাত্রা</strong><span>FRG-2024 • kg/ha</span></div><div class="legend-grid">${entries.map((entry) => {
+    const label = translateClass(entry.status_class);
+    const rate = entry.applicable && entry.min_kg_ha !== null && entry.max_kg_ha !== null
+      ? `${fmt(entry.min_kg_ha, 1)}–${fmt(entry.max_kg_ha, 1)} kg/ha`
+      : 'এই শ্রেণির জন্য আলাদা dose নেই';
+    const color = entry.applicable ? (CLASS_COLORS[entry.status_class] || '#d9dfdc') : '#d9dfdc';
+    const note = entry.applicable ? '' : `<small>${escapeHtml(entry.note_bn || 'ল্যাব soil-test প্রয়োজন।')}</small>`;
+    return `<div class="legend-entry"><span class="legend-swatch" style="background:${color}"></span><div><strong>${escapeHtml(label)}</strong><span>${rate}</span>${note}</div></div>`;
+  }).join('')}</div><p class="small-note muted">রঙ মাটির interpolated শ্রেণি অনুযায়ী। High/Very High শ্রেণিতে FRG-2024-এর crop table আলাদা dose না দিলে ধূসর zone দেখানো হয়; এটিকে শূন্য সারমাত্রা হিসেবে ধরে নেবেন না।</p>`;
+}
+
+function renderRecommendation(report) {
+  const container = $('recommendation-report');
+  if (!container) return;
+  if (!report) {
+    container.innerHTML = '<div class="card"><p class="muted">পূর্ণ নমুনা সংরক্ষণ করে “পুরো জমির সার ও ফলন পরিকল্পনা তৈরি করুন” চাপলে FRG-2024-এর ফলাফল এখানে দেখাবে।</p></div>';
+    return;
+  }
+  const y = report.yield_comparison || {};
+  const fmtYieldRange = (a, b) => `${fmt(a, 2)}–${fmt(b, 2)} টন/হেক্টর`;
+  let beforeHtml = '<strong>সংখ্যাগত রেঞ্জ নেই</strong><p>FRG-2024-এর সাধারণ response table এই nutrient status-এর জন্য fertilizer ছাড়া yield-এর নির্দিষ্ট শতাংশ দেয় না। তাই অনুমান করে ফলন বানানো হয়নি।</p>';
+  if (y.before_range_available) {
+    const beforePct = y.before_percent_range || [];
+    beforeHtml = `<strong>${fmtYieldRange(y.before_fertilizer_min_t_ha, y.before_fertilizer_max_t_ha)}</strong><p>মোট জমিতে আনুমানিক ${fmt(y.before_fertilizer_min_field_kg, 1)}–${fmt(y.before_fertilizer_max_field_kg, 1)} কেজি। FRG-2024 Table 2-এর ভিত্তিতে সর্বাধিক yield goal-এর ${fmt(beforePct[0], 0)}–${fmt(beforePct[1], 0)}% হিসাবে হিসাব; এটি প্রকৃত মাপা ফলন নয়। Limiting nutrient: ${escapeHtml(y.limiting_nutrient || '—')} (${fmt(y.critical_limit_percent, 1)}% critical limit)।</p>`;
+  }
+  const afterHtml = `<strong>${fmtYieldRange(y.after_fertilizer_min_t_ha, y.after_fertilizer_max_t_ha)}</strong><p>জমির আয়তন অনুযায়ী লক্ষ্য-পরিসর ${fmt(y.after_fertilizer_min_field_kg, 1)}–${fmt(y.after_fertilizer_max_field_kg, 1)} কেজি। এটি FRG-2024 yield goal, নিশ্চিত ফলন পূর্বাভাস নয়।</p>`;
+  const classes = report.classes || {};
+  const nutRows = [
+    ['N', 'নাইট্রোজেন', classes.N, 'মূল একক %'],
+    ['P', 'ফসফরাস', classes.P, report.crop === 'Rice' ? 'মূল একক µg/g (ধানের wetland শ্রেণি)' : 'মূল একক µg/g'],
+    ['K', 'পটাশিয়াম', classes.K, 'মূল একক meq/100g']
+  ];
+  const fertilizerRows = Object.entries(report.fertilizer_totals || {}).map(([key, item]) => {
+    const product = PRODUCT_BN[key] || item.label_bn || key;
+    const complete = item.area_total_complete;
+    const dosage = item.average_min_kg_ha === null || item.average_max_kg_ha === null
+      ? 'প্রযোজ্য/গণনাযোগ্য অঞ্চল নেই'
+      : `${fmt(item.average_min_kg_ha, 1)}–${fmt(item.average_max_kg_ha, 1)} kg/ha`;
+    const total = complete
+      ? `${fmt(item.total_min_kg, 2)}–${fmt(item.total_max_kg, 2)} কেজি`
+      : `গণনাযোগ্য ${fmt(item.rated_area_ha, 4)} ha-তে ${fmt(item.total_min_kg, 2)}–${fmt(item.total_max_kg, 2)} কেজি`;
+    const coverage = `${fmt(item.coverage_percent, 1)}% এলাকা`;
+    return `<tr><td><strong>${escapeHtml(product)}</strong></td><td>${dosage}</td><td>${total}<small>${coverage}${item.unrated_area_ha > 0.000001 ? ` • dose নির্ধারিত নয় ${fmt(item.unrated_area_ha, 4)} ha` : ''}</small></td></tr>`;
+  }).join('');
+  const organic = report.organic_fertilizer_t_ha === null || report.organic_fertilizer_t_ha === undefined
+    ? '<p>এই crop profile-এ আলাদা জৈব সারের dose দেওয়া নেই।</p>'
+    : `<p><strong>${fmt(report.organic_fertilizer_t_ha, 2)} টন/হেক্টর</strong> — পুরো জমিতে ${fmt(report.organic_fertilizer_field_t, 3)} টন।</p>`;
+  const extra = (report.extra_nutrients_not_measured || []).map((item) => `<li>${escapeHtml(item.label_bn)}: ${escapeHtml(item.note_bn)}</li>`).join('');
+  const apply = (report.application_bn || []).map((line) => `<li>${escapeHtml(line)}</li>`).join('');
+  const limitations = (report.limitations_bn || []).map((line) => `<li>${escapeHtml(line)}</li>`).join('');
+  const validation = state.vra?.spatial_validation;
+  let validationHtml = '';
+  if (!validation || !validation.valid) {
+    validationHtml = `<div class="report-warning"><strong>মানচিত্রের নির্ভরযোগ্যতা</strong><p>${escapeHtml(validation?.note_bn || 'Cross-validation হিসাবের জন্য পর্যাপ্ত point নেই।')} কম point থাকলে map-টি কেবল প্রাথমিক নির্দেশক।</p></div>`;
+  } else {
+    const metrics = validation.metrics || {};
+    validationHtml = `<div class="report-warning"><strong>Spatial validation (IDW, leave-one-out)</strong><p>N MAE ${fmt(metrics.N?.mae, 4)} • P MAE ${fmt(metrics.P?.mae, 2)} • K MAE ${fmt(metrics.K?.mae, 4)}। ${escapeHtml(validation.note_bn || '')}</p></div>`;
+  }
+  const progress = state.vra?.sampling_progress;
+  container.innerHTML = `
+    <div class="card recommendation-card">
+      <div class="recommendation-title"><div><span class="eyebrow">FRG-2024 • প্রাথমিক পরিকল্পনা</span><h3>ফসল, সার ও সম্ভাব্য ফলন</h3></div><span class="badge">${fmtCoord(report.sample_count, 0)}টি নমুনা</span></div>
+      <p class="muted small-note">ফসল: ${escapeHtml(cropName(report.crop))} • জাত: ${escapeHtml(report.variety_bn || report.variety || '—')} • মৌসুম: ${escapeHtml(report.season_label_bn || seasonName(report.season))} • জমি: ${fmt(report.field_area_m2, 1)} মি² (${fmt(report.field_area_ha, 4)} হেক্টর) • উৎস: ${escapeHtml(report.source_page || 'FRG-2024')}</p>
+      ${progress && !progress.complete ? `<div class="report-warning"><strong>নমুনা অসম্পূর্ণ</strong><p>${fmtCoord(progress.saved_points, 0)}/${fmtCoord(progress.required_points, 0)} পয়েন্ট save হয়েছে। ফলাফল কেবল বর্তমানে সংরক্ষিত sample-এর প্রাথমিক মানচিত্র; সব point save না করা পর্যন্ত পূর্ণ মাঠের সার পরিকল্পনা তৈরি করবেন না।</p></div>` : ''}
+      <div class="yield-comparison">
+        <article><span>সার প্রয়োগ ছাড়া — গাইডভিত্তিক রেফারেন্স</span>${beforeHtml}</article>
+        <article><span>সার ব্যবস্থাপনার পরে — FRG yield goal</span>${afterHtml}</article>
+      </div>
+      <p class="small-note muted">ফলনের দুই মানের তুলনা FRG-2024-এর সাধারণ response band ও crop yield goal থেকে তৈরি প্রাথমিক হিসাব। সার দেওয়ার পরের প্রকৃত ফলন আবহাওয়া, সেচ, জাত, রোগবালাই এবং মাঠের ব্যবস্থাপনার ওপর নির্ভর করে।</p>
+    </div>
+    <div class="card recommendation-card"><h3>পুষ্টির শ্রেণি ও সার পরিকল্পনা</h3>
+      <div class="nutrient-status-grid">${nutRows.map(([key, label, cls, unit]) => `<div><span>${label} (${key})</span><strong>${escapeHtml(translateClass(cls))}</strong><small>${escapeHtml(unit)}</small></div>`).join('')}</div>
+      <div class="table-wrap"><table class="recommendation-table"><thead><tr><th>সার</th><th>প্রস্তাবিত পরিসর</th><th>এই জমির আনুমানিক পরিমাণ</th></tr></thead><tbody>${fertilizerRows}</tbody></table></div>
+      <h4>জৈব সার</h4>${organic}
+      <p class="small-note muted">সারের পরিমাণ FRG-2024-এর nutrient recommendation ও Appendix-10 conversion factor থেকে গণনা করা। যেখানে crop table নির্দিষ্ট শ্রেণির dose দেয় না, সেই zone ধূসর দেখানো হয়েছে; তার পরিমাণকে শূন্য ধরে নেওয়া হয়নি।</p>
+    </div>
+    <div class="card recommendation-card"><h3>সার প্রয়োগের সময় ও সতর্কতা</h3><ul>${apply || '<li>নির্বাচিত crop profile-এ বিস্তারিত প্রয়োগ নির্দেশনা নেই; FRG-2024-এর crop-specific পৃষ্ঠা দেখুন।</li>'}</ul>
+      ${extra ? `<h4>যে nutrient sensor মাপে না</h4><ul>${extra}</ul>` : ''}
+      ${validationHtml}
+      <h4>এই হিসাবের সীমাবদ্ধতা</h4><ul>${limitations}</ul>
+      <p class="source-note">Reference: Bangladesh Agricultural Research Council (BARC), Fertilizer Recommendation Guide-2024. Crop table: ${escapeHtml(report.source_page || 'প্রাসঙ্গিক FRG-2024 crop table')}; soil class: Appendix-8; conversion factor: Appendix-10.</p>
+    </div>`;
+}
+
 function renderPoints() {
   const container = $('vra-points');
   if (!state.vra) { container.textContent = 'তথ্য নেই'; return; }
@@ -565,38 +731,79 @@ async function loadHistory() {
   } catch (error) { $('history-list').textContent = error.message; }
 }
 $('refresh-history').addEventListener('click', loadHistory);
+// Crop, season and variety options come from the FRG-2024 tables included with this project.
 function cropName(value) {
-  const map = { Rice: 'ধান', Wheat: 'গম', Maize: 'ভুট্টা', Potato: 'আলু', Tomato: 'টমেটো', Eggplant: 'বেগুন', Chili: 'মরিচ', Mustard: 'সরিষা', Lentil: 'মসুর ডাল', Onion: 'পেঁয়াজ' };
+  const map = { Rice: 'ধান', Wheat: 'গম', Lentil: 'মসুর ডাল', Onion: 'পেঁয়াজ', Maize: 'ভুট্টা', Potato: 'আলু', Tomato: 'টমেটো', Eggplant: 'বেগুন', Chili: 'মরিচ', Mustard: 'সরিষা' };
   return map[value] || value || '—';
 }
-
-// Crop labels are Bengali while backend keys remain the original stable English values.
-const varietyOptions = {
-  Rice: ['BRRI dhan28', 'BRRI dhan29', 'BRRI dhan49', 'BRRI dhan52', 'BRRI dhan75'],
-  Wheat: ['BARI Gom 26', 'BARI Gom 28', 'BARI Gom 30', 'BARI Gom 32', 'BARI Gom 33'],
-  Maize: ['BARI Hybrid Maize 5', 'BARI Hybrid Maize 7', 'BARI Hybrid Maize 9', 'Local Maize', 'Hybrid Maize'],
-  Potato: ['Cardinal', 'Diamant', 'Granola', 'Lady Rosetta', 'Local Potato'],
-  Tomato: ['BARI Tomato 2', 'BARI Tomato 4', 'BARI Tomato 5', 'BARI Tomato 14', 'Hybrid Tomato'],
-  Eggplant: ['BARI Begun 1', 'BARI Begun 2', 'BARI Begun 4', 'BARI Begun 5', 'Local Eggplant'],
-  Chili: ['BARI Morich 1', 'BARI Morich 2', 'BARI Morich 3', 'Local Chili', 'Hybrid Chili'],
-  Mustard: ['BARI Sarisha 11', 'BARI Sarisha 14', 'BARI Sarisha 15', 'BARI Sarisha 16', 'Local Mustard'],
-  Lentil: ['BARI Masur 4', 'BARI Masur 5', 'BARI Masur 6', 'BARI Masur 7', 'Local Lentil'],
-  Onion: ['BARI Piaz 1', 'BARI Piaz 3', 'BARI Piaz 4', 'BARI Piaz 5', 'Local Onion']
-};
-function updateVarietyOptions(crop, selected = '') {
+function seasonName(value) {
+  const map = { Boro: 'বোরো', Aus: 'আউশ', Aman: 'আমন', Rabi: 'রবি', Summer: 'গ্রীষ্মকালীন' };
+  return map[value] || value || '—';
+}
+function getSelectedProfile() {
+  const token = $('field-variety')?.value || '';
+  const key = token.split('|', 1)[0];
+  return state.frgProfiles.find((profile) => profile.key === key) || null;
+}
+function updateYieldDisplay() {
+  const profile = getSelectedProfile();
+  $('field-yield').value = profile
+    ? `${profile.yield_goal_t_ha} ± ${profile.yield_tolerance_t_ha} টন/হেক্টর (FRG-2024, পৃষ্ঠা ${String(profile.source_page || '').match(/p\.(\d+)/)?.[1] || '—'})`
+    : 'জাত নির্বাচন করলে ফলন লক্ষ্য দেখাবে';
+}
+function updateVarietyOptions(crop, season, selected = '') {
   const select = $('field-variety');
   select.innerHTML = '';
-  if (!crop) {
+  if (!crop || !season) {
     select.disabled = true;
-    select.appendChild(new Option('আগে ফসল নির্বাচন করুন', ''));
+    select.appendChild(new Option('আগে ফসল ও মৌসুম নির্বাচন করুন', ''));
+    $('field-yield').value = 'ফসল, মৌসুম ও জাত নির্বাচন করুন';
     return;
   }
+  const profiles = state.frgProfiles.filter((profile) => profile.crop === crop && profile.season === season);
   select.disabled = false;
   select.appendChild(new Option('জাত নির্বাচন করুন', ''));
-  (varietyOptions[crop] || []).forEach((variety) => select.appendChild(new Option(variety, variety)));
-  if (selected) select.value = selected;
+  const varieties = profiles.flatMap((profile) => profile.varieties.map((variety) => ({
+    ...variety,
+    goal: profile.yield_goal_t_ha,
+    tolerance: profile.yield_tolerance_t_ha,
+    key: profile.key
+  })));
+  varieties.forEach((variety) => {
+    const goal = `${variety.goal} ± ${variety.tolerance} টন/হেক্টর`;
+    select.appendChild(new Option(`${variety.label_bn} — ফলন লক্ষ্য ${goal}`, variety.value));
+  });
+  if (selected) {
+    const matched = [...select.options].find((option) => option.value === selected || option.value.endsWith(`|${selected}`));
+    if (matched) select.value = matched.value;
+  }
+  updateYieldDisplay();
 }
-$('field-crop').addEventListener('change', () => updateVarietyOptions($('field-crop').value));
+function updateSeasonOptions(crop, selectedSeason = '', selectedVariety = '') {
+  const seasonSelect = $('field-season');
+  seasonSelect.innerHTML = '';
+  if (!crop) {
+    seasonSelect.disabled = true;
+    seasonSelect.appendChild(new Option('আগে ফসল নির্বাচন করুন', ''));
+    updateVarietyOptions('', '', '');
+    $('rhizobium-row').classList.add('hidden');
+    $('field-rhizobium').checked = false;
+    return;
+  }
+  const seasons = [...new Map(state.frgProfiles.filter((profile) => profile.crop === crop).map((profile) => [profile.season, profile.season_label_bn])).entries()];
+  seasonSelect.disabled = false;
+  seasonSelect.appendChild(new Option('মৌসুম নির্বাচন করুন', ''));
+  seasons.forEach(([key, label]) => seasonSelect.appendChild(new Option(label, key)));
+  const chosen = seasons.find(([key]) => key === selectedSeason) || (seasons.length === 1 ? seasons[0] : null);
+  seasonSelect.value = chosen ? chosen[0] : '';
+  updateVarietyOptions(crop, seasonSelect.value, selectedVariety);
+  const isLentil = crop === 'Lentil';
+  $('rhizobium-row').classList.toggle('hidden', !isLentil);
+  if (!isLentil) $('field-rhizobium').checked = false;
+}
+$('field-crop').addEventListener('change', () => updateSeasonOptions($('field-crop').value));
+$('field-season').addEventListener('change', () => updateVarietyOptions($('field-crop').value, $('field-season').value));
+$('field-variety').addEventListener('change', updateYieldDisplay);
 
 async function restoreField(fieldId) {
   const data = await api(`/api/fields/${fieldId}`);
@@ -611,9 +818,12 @@ async function restoreField(fieldId) {
   $('field-width').value = field.width_m;
   $('field-spacing').value = field.spacing_m;
   $('field-crop').value = field.crop || '';
-  updateVarietyOptions(field.crop || '', field.variety || '');
+  updateSeasonOptions(field.crop || '', field.season || '', field.variety || '');
   $('field-season').value = field.season || '';
-  $('field-yield').value = field.yield_goal || '';
+  updateVarietyOptions(field.crop || '', field.season || '', field.variety || '');
+  $('field-rhizobium').checked = Boolean(field.rhizobium_used);
+  $('rhizobium-row').classList.toggle('hidden', field.crop !== 'Lentil');
+  updateYieldDisplay();
   $('vra-field-id').value = field.id;
   await loadGrid();
 }
@@ -626,4 +836,17 @@ async function restoreLastField() {
     state.grid = null;
   }
 }
-restoreLastField();
+async function initializeApp() {
+  try {
+    const data = await api('/api/frg/options');
+    state.frgProfiles = data.profiles || [];
+  } catch (error) {
+    flash('FRG-2024 ফসল/জাতের তালিকা লোড হয়নি: ' + error.message, 'error');
+  }
+  if (!$('field-crop').value) {
+    $('field-season').disabled = true;
+    $('field-variety').disabled = true;
+  }
+  await restoreLastField();
+}
+initializeApp();
