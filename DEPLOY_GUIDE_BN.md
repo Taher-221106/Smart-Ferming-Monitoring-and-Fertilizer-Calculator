@@ -4,7 +4,7 @@
 
 ## ১. ZIP থেকে ফাইল নিন
 
-`Smart-Farming-Bangla-Updated.zip` extract করুন। ভেতরের `Smart-Ferming-Monitoring-and-Fertilizer-Calculator-main` folder-এ updated project আছে।
+`Smart-Farming-Bangla-Updated-v2.zip` extract করুন। ভেতরের `Smart-Ferming-Monitoring-and-Fertilizer-Calculator-main` folder-এ updated project আছে।
 
 ## ২. GitHub repository-তে আপডেট দিন
 
@@ -43,8 +43,8 @@ Render Dashboard-এ service খুলুন। GitHub branch connected থা�
 
 1. মাঠের একটি বাস্তব কোণকে A (0,0) হিসেবে চিহ্নিত করুন।
 2. দৈর্ঘ্য X এবং প্রস্থ Y বরাবর মিটার মেপে মানচিত্রের পয়েন্টে যান।
-3. পয়েন্ট নির্বাচন করে **সেন্সর থেকে ৩টি নতুন পাঠ নিন** চাপুন। ESP32-কে ওই জায়গায় স্থির রাখুন।
-4. Firmware প্রতি ১৫ সেকেন্ডে upload করলে তিনটি নতুন পাঠ পেতে প্রায় ৩০–৪৫ সেকেন্ড লাগতে পারে। গড় মান দেখা গেলে যাচাই করে **এই পয়েন্টের তথ্য সংরক্ষণ করুন** চাপুন।
+3. মাঠে গিয়ে সেন্সর বসিয়ে মানচিত্রে ওই পয়েন্টের ID-তে ক্লিক করুন। প্যানেলে sensor value স্বয়ংক্রিয়ভাবে refresh হবে।
+4. ESP32 প্রতি ১৫ সেকেন্ডে upload করলে পরের নতুন পাঠ আসতে প্রায় ১৫ সেকেন্ড লাগতে পারে। নতুন reading এলে Save সক্রিয় হবে; মান যাচাই করে **এই পয়েন্টের তথ্য সংরক্ষণ করুন** চাপুন। এই সংস্করণে প্রতি পয়েন্টে সর্বশেষ একটি reading save হয়, তিনটি পাঠের গড় নয়।
 5. পরের পয়েন্টে গিয়ে একই পদ্ধতি অনুসরণ করুন।
 
 ## ৫. Field/sample history স্থায়ী রাখুন

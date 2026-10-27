@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0d4d35">
   <title>স্মার্ট ফার্মিং প্ল্যাটফর্ম</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=4">
 </head>
 <body>
   <aside class="sidebar">
@@ -91,11 +91,11 @@
         <div class="card point-list-card"><h3>সব নমুনা পয়েন্ট</h3><p class="muted">যে পয়েন্টে যেতে চান সেটি নির্বাচন করুন। সবুজ পয়েন্টে তথ্য সংরক্ষিত আছে।</p><div id="point-list" class="point-list"></div></div>
 
         <div class="point-card card">
-          <div class="point-header"><div><span id="active-point">P001</span><small id="point-help">পয়েন্টের অবস্থানে গিয়ে সেন্সর স্থির রাখুন, তারপর নতুন পাঠ সংগ্রহ করুন।</small></div><span class="badge" id="point-status">অপেক্ষমাণ</span></div>
+          <div class="point-header"><div><span id="active-point">P001</span><small id="point-help">পয়েন্টে সেন্সর বসান। লাইভ পাঠ আসলে মান দেখে সংরক্ষণ করুন।</small></div><span class="badge" id="point-status">অপেক্ষমাণ</span></div>
           <div id="point-coordinate" class="coordinate-panel"></div>
           <div id="point-neighbors" class="neighbor-panel"></div>
-          <div class="capture-instructions"><strong>নমুনা নেওয়ার নিয়ম:</strong> নির্বাচিত পয়েন্টের অবস্থানে সেন্সর বসান। এরপর নিচের বোতাম চাপুন। ESP32 থেকে পরপর <b>৩টি নতুন পাঠ</b> আসা পর্যন্ত অপেক্ষা করবে এবং গড় মান দেখাবে। পুরোনো পাঠকে নতুন পাঠ হিসেবে ব্যবহার করা হবে না।</div>
-          <div class="capture-controls"><button class="primary" id="start-capture">সেন্সর থেকে ৩টি নতুন পাঠ নিন</button><span id="sensor-capture-status" class="capture-status" role="status" aria-live="polite">এখনও কোনো নতুন পাঠ সংগ্রহ করা হয়নি।</span></div>
+          <div class="capture-instructions"><strong>নমুনা নেওয়ার নিয়ম:</strong> মাঠে গিয়ে নির্বাচিত পয়েন্টে সেন্সর বসান, তারপর মানচিত্রে সেই পয়েন্টের ID-তে ক্লিক করুন। সেন্সরের সর্বশেষ পাঠ এখানে স্বয়ংক্রিয়ভাবে হালনাগাদ হবে। নতুন পাঠ এলে মানগুলো দেখে <b>এই পয়েন্টের তথ্য সংরক্ষণ করুন</b> চাপুন। প্রতিটি সংরক্ষিত পাঠ নির্বাচিত পয়েন্টের সঙ্গেই যুক্ত হবে।</div>
+          <div class="capture-controls"><span class="live-indicator" aria-hidden="true"></span><span id="sensor-capture-status" class="capture-status" role="status" aria-live="polite">লাইভ সেন্সর পাঠের জন্য সংযোগ হচ্ছে…</span></div>
           <div class="form-grid point-inputs">
             <label>বাতাসের তাপমাত্রা (°C)<input id="sample-air-temp" type="text" readonly value="—"></label>
             <label>বাতাসের আর্দ্রতা (%)<input id="sample-air-hum" type="text" readonly value="—"></label>
@@ -107,11 +107,7 @@
             <label>ফসফরাস P (µg/g FRG)<input id="sample-p" type="text" readonly value="—"></label>
             <label>পটাশিয়াম K (meq/100g FRG)<input id="sample-k" type="text" readonly value="—"></label>
           </div>
-          <details class="raw-details"><summary>কাঁচা ও সংশোধিত NPK মান দেখুন</summary><div class="form-grid point-inputs">
-            <label>N raw<input id="sample-n-raw" type="text" readonly value="—"></label><label>P raw<input id="sample-p-raw" type="text" readonly value="—"></label><label>K raw<input id="sample-k-raw" type="text" readonly value="—"></label>
-            <label>N corrected<input id="sample-n-corrected" type="text" readonly value="—"></label><label>P corrected<input id="sample-p-corrected" type="text" readonly value="—"></label><label>K corrected<input id="sample-k-corrected" type="text" readonly value="—"></label>
-          </div></details>
-          <div class="capture-footer"><span id="reading-window" class="muted">গড় তৈরি হলে পাঠের সময় দেখা যাবে।</span><button class="primary" id="capture-point" disabled>এই পয়েন্টের তথ্য সংরক্ষণ করুন</button></div>
+<div class="capture-footer"><span id="reading-window" class="muted">সর্বশেষ লাইভ পাঠের সময় এখানে দেখা যাবে।</span><button class="primary" id="capture-point" disabled>এই পয়েন্টের তথ্য সংরক্ষণ করুন</button></div>
         </div>
 
         <div class="card action-row"><button class="primary" id="run-calculation">সংরক্ষিত নমুনা বিশ্লেষণ করুন</button><div id="calc-result"></div></div>
@@ -134,6 +130,6 @@
       <div class="card"><div id="history-list"></div></div>
     </section>
   </main>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>

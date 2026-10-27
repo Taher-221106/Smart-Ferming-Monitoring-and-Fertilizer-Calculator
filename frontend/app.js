@@ -6,14 +6,16 @@ const state = {
   vra: null,
   layer: 'N',
   selectedPoint: 1,
-  capture: null,
-  captureSequence: 0,
+  latestLive: null,
+  latestLiveReceivedAt: 0,
+  selectedPointBaselineId: null,
+  baselinePending: true,
+  savedSinceSelection: false,
   pendingSample: null
 };
 const $ = (id) => document.getElementById(id);
-const SAMPLE_COUNT = 3;
-const CAPTURE_TIMEOUT_MS = 100000;
-const POLL_INTERVAL_MS = 2500;
+const LIVE_POLL_INTERVAL_MS = 5000;
+const LIVE_MAX_AGE_MS = 60000;
 
 function fmt(value, digits = 2) {
   if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return '—';
@@ -81,13 +83,17 @@ document.querySelectorAll('.nav-btn').forEach((button) => { button.addEventListe
 async function loadLive() {
   try {
     const data = await api('/api/live');
-    if (!data.available) {
+    state.latestLiveReceivedAt = Date.now();
+    if (!data.available || !Number.isFinite(Number(data.id))) {
+      state.latestLive = null;
       $('status-title').textContent = 'সেন্সরের অপেক্ষায়';
       $('status-text').textContent = 'এখনো কোনো পাঠ পাওয়া যায়নি';
       $('status-dot').style.background = '#e7a900';
       ['live-n', 'live-p', 'live-k', 'live-ph', 'live-ec', 'live-moist', 'live-air-temp', 'live-air-hum', 'live-soil-temp', 'live-time', 'class-n', 'class-p', 'class-k'].forEach((id) => { $(id).textContent = '—'; });
+      updateSelectedPointLive(null);
       return;
     }
+    state.latestLive = data;
     $('status-title').textContent = 'সরাসরি তথ্য';
     $('status-text').textContent = `সর্বশেষ পাঠ: ${dateBn(data.timestamp)}`;
     $('status-dot').style.background = '#1da864';
@@ -104,15 +110,17 @@ async function loadLive() {
     $('class-n').textContent = translateClass(data.classes?.N);
     $('class-p').textContent = translateClass(data.classes?.P);
     $('class-k').textContent = translateClass(data.classes?.K);
+    updateSelectedPointLive(data);
   } catch (error) {
     $('status-title').textContent = 'সার্ভার সমস্যা';
     $('status-text').textContent = error.message;
     $('status-dot').style.background = '#d64545';
+    updateSelectedPointLive(state.latestLive);
   }
 }
 $('refresh-live').addEventListener('click', loadLive);
 loadLive();
-setInterval(loadLive, 10000);
+setInterval(loadLive, LIVE_POLL_INTERVAL_MS);
 
 function svgEl(tag, attrs = {}, text = null) {
   const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -124,67 +132,96 @@ function drawField(points, field) {
   const svg = $('field-svg');
   if (!svg || !field || !points) return;
   while (svg.firstChild) svg.removeChild(svg.firstChild);
-  const W = 1000, H = 650;
-  const maxPlotW = 800, maxPlotH = 400;
-  const scale = Math.min(maxPlotW / Number(field.length_m), maxPlotH / Number(field.width_m));
-  const plotW = Number(field.length_m) * scale;
-  const plotH = Number(field.width_m) * scale;
+
+  // Use a generous viewBox so IDs, coordinate labels and dimensions remain legible.
+  const W = 1120, H = 800;
+  const maxPlotW = 820, maxPlotH = 450;
+  const length = Number(field.length_m), width = Number(field.width_m);
+  const scale = Math.min(maxPlotW / length, maxPlotH / width);
+  const plotW = length * scale;
+  const plotH = width * scale;
   const ox = (W - plotW) / 2;
-  const bottom = 500;
+  const bottom = 625;
   const top = bottom - plotH;
-  const x = (point) => ox + (Number(point.x_m) / Number(field.length_m)) * plotW;
-  const y = (point) => bottom - (Number(point.y_m) / Number(field.width_m)) * plotH;
+  const x = (point) => ox + (Number(point.x_m) / length) * plotW;
+  const y = (point) => bottom - (Number(point.y_m) / width) * plotH;
+  const spacing = Number(field.spacing_m);
 
-  svg.appendChild(svgEl('rect', { x: 0, y: 0, width: W, height: H, fill: '#f1f8f4', rx: 16 }));
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  svg.appendChild(svgEl('rect', { x: 0, y: 0, width: W, height: H, fill: '#f1f8f4', rx: 18 }));
+  svg.appendChild(svgEl('text', { x: W / 2, y: 42, 'text-anchor': 'middle', 'font-size': 23, fill: '#174735', 'font-weight': 800 }, 'মাঠের নমুনা পয়েন্ট ও দূরত্ব'));
+
   const defs = svgEl('defs');
-  const marker = svgEl('marker', { id: 'arrowhead', markerWidth: 7, markerHeight: 7, refX: 3.5, refY: 3.5, orient: 'auto-start-reverse' });
-  marker.appendChild(svgEl('path', { d: 'M 0 0 L 7 3.5 L 0 7 z', fill: '#526e61' }));
-  defs.appendChild(marker); svg.appendChild(defs);
-  svg.appendChild(svgEl('rect', { x: ox, y: top, width: plotW, height: plotH, fill: '#e9f5ee', stroke: '#1c744c', 'stroke-width': 4 }));
+  const marker = svgEl('marker', { id: 'sf-arrowhead', markerWidth: 8, markerHeight: 8, refX: 4, refY: 4, orient: 'auto-start-reverse' });
+  marker.appendChild(svgEl('path', { d: 'M 0 0 L 8 4 L 0 8 z', fill: '#526e61' }));
+  defs.appendChild(marker);
+  svg.appendChild(defs);
 
-  // Distance guides between adjacent points: values are calculated from coordinates.
-  const drawnPairs = new Set();
-  points.forEach((point) => {
-    (point.nearest_points || []).forEach((near) => {
-      const other = points.find((candidate) => Number(candidate.point_no) === Number(near.point_no));
-      if (!other) return;
-      const dx = Math.abs(Number(point.x_m) - Number(other.x_m));
-      const dy = Math.abs(Number(point.y_m) - Number(other.y_m));
-      if (!(dx < 0.01 || dy < 0.01)) return; // show direct neighbours only, not diagonals
-      const key = [Math.min(point.point_no, other.point_no), Math.max(point.point_no, other.point_no)].join('-');
-      if (drawnPairs.has(key)) return;
-      drawnPairs.add(key);
-      svg.appendChild(svgEl('line', { x1: x(point), y1: y(point), x2: x(other), y2: y(other), stroke: '#b97922', 'stroke-width': 2, 'stroke-dasharray': '7 5', opacity: 0.9 }));
-      const mx = (x(point) + x(other)) / 2, my = (y(point) + y(other)) / 2;
-      svg.appendChild(svgEl('rect', { x: mx - 21, y: my - 13, width: 42, height: 22, rx: 8, fill: '#fffaf0', stroke: '#e6d5b8', 'stroke-width': 1 }));
-      svg.appendChild(svgEl('text', { x: mx, y: my + 3, 'text-anchor': 'middle', 'font-size': 12, fill: '#75501d', 'font-weight': 700 }, `${fmtCoord(near.distance_m)} m`));
-    });
+  // Field boundary and light grid axes at each actual sample-centre coordinate.
+  svg.appendChild(svgEl('rect', { x: ox, y: top, width: plotW, height: plotH, fill: '#e9f5ee', stroke: '#1c744c', 'stroke-width': 5 }));
+  const xs = [...new Set(points.map((p) => Number(p.x_m)))].sort((a,b) => a-b);
+  const ys = [...new Set(points.map((p) => Number(p.y_m)))].sort((a,b) => a-b);
+  xs.forEach((xv) => {
+    const xx = ox + (xv / length) * plotW;
+    svg.appendChild(svgEl('line', { x1: xx, y1: top, x2: xx, y2: bottom, stroke: '#bfd9ca', 'stroke-width': 1.5, 'stroke-dasharray': '4 6' }));
+    svg.appendChild(svgEl('text', { x: xx, y: bottom + 34, 'text-anchor': 'middle', 'font-size': 14, fill: '#355b49', 'font-weight': 700 }, `X ${fmtCoord(xv)} মি`));
+  });
+  ys.forEach((yv) => {
+    const yy = bottom - (yv / width) * plotH;
+    svg.appendChild(svgEl('line', { x1: ox, y1: yy, x2: ox + plotW, y2: yy, stroke: '#bfd9ca', 'stroke-width': 1.5, 'stroke-dasharray': '4 6' }));
+    svg.appendChild(svgEl('text', { x: ox - 22, y: yy + 5, 'text-anchor': 'end', 'font-size': 14, fill: '#355b49', 'font-weight': 700 }, `Y ${fmtCoord(yv)} মি`));
   });
 
-  // Points are clickable, keyboard accessible, and visually distinguish saved/selected points.
+  // Draw only immediate horizontal/vertical neighbours and annotate their measured distance.
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const a = points[i], b = points[j];
+      const dx = Math.abs(Number(a.x_m) - Number(b.x_m));
+      const dy = Math.abs(Number(a.y_m) - Number(b.y_m));
+      const horizontal = dy < 0.001 && dx > 0.001 && dx <= spacing + 0.01;
+      const vertical = dx < 0.001 && dy > 0.001 && dy <= spacing + 0.01;
+      if (!horizontal && !vertical) continue;
+      const ax = x(a), ay = y(a), bx = x(b), by = y(b);
+      svg.appendChild(svgEl('line', { x1: ax, y1: ay, x2: bx, y2: by, stroke: '#b97922', 'stroke-width': 3, 'stroke-dasharray': '8 6', opacity: 0.95 }));
+      const mx = (ax + bx) / 2, my = (ay + by) / 2;
+      const labelX = horizontal ? mx : mx + 30;
+      const labelY = horizontal ? my - 15 : my;
+      const dist = Math.hypot(dx, dy);
+      svg.appendChild(svgEl('rect', { x: labelX - 34, y: labelY - 14, width: 68, height: 26, rx: 9, fill: '#fffaf0', stroke: '#dfc18f', 'stroke-width': 1.5 }));
+      svg.appendChild(svgEl('text', { x: labelX, y: labelY + 4, 'text-anchor': 'middle', 'font-size': 14, fill: '#75501d', 'font-weight': 800 }, `${fmtCoord(dist)} মি`));
+    }
+  }
+
+  // Draw readable point markers with a proper label pill and its exact coordinates.
   points.forEach((point) => {
     const selected = Number(point.point_no) === Number(state.selectedPoint);
     const cx = x(point), cy = y(point);
     const group = svgEl('g', { role: 'button', tabindex: 0, 'aria-label': `${pointId(point.point_no)}, X ${fmtCoord(point.x_m)} মিটার, Y ${fmtCoord(point.y_m)} মিটার` });
     group.style.cursor = 'pointer';
-    group.appendChild(svgEl('circle', { cx, cy, r: selected ? 17 : 13, fill: selected ? '#bf791b' : (point.saved ? '#23a566' : '#145f42'), stroke: '#ffffff', 'stroke-width': selected ? 5 : 3 }));
-    group.appendChild(svgEl('text', { x: cx, y: cy + 4, 'text-anchor': 'middle', 'font-size': 10, fill: '#ffffff', 'font-weight': 800, 'pointer-events': 'none' }, pointId(point.point_no)));
-    const title = svgEl('title', {}, `${pointId(point.point_no)} — X ${fmtCoord(point.x_m)} m, Y ${fmtCoord(point.y_m)} m — ${point.saved ? 'সংরক্ষিত' : 'অসংরক্ষিত'}`);
-    group.appendChild(title);
+    group.appendChild(svgEl('circle', { cx, cy, r: selected ? 13 : 10, fill: selected ? '#bf791b' : (point.saved ? '#23a566' : '#145f42'), stroke: '#ffffff', 'stroke-width': 4 }));
+    const tagY = cy + 18;
+    group.appendChild(svgEl('rect', { x: cx - 32, y: tagY, width: 64, height: 25, rx: 9, fill: selected ? '#fff3d7' : '#ffffff', stroke: selected ? '#bf791b' : (point.saved ? '#23a566' : '#145f42'), 'stroke-width': 1.6 }));
+    group.appendChild(svgEl('text', { x: cx, y: tagY + 17, 'text-anchor': 'middle', 'font-size': 14, fill: '#123f2e', 'font-weight': 900, 'pointer-events': 'none' }, pointId(point.point_no)));
+    group.appendChild(svgEl('title', {}, `${pointId(point.point_no)} — X=${fmtCoord(point.x_m)} মি, Y=${fmtCoord(point.y_m)} মি — ${point.saved ? 'তথ্য সংরক্ষিত' : 'তথ্য বাকি'}`));
     group.addEventListener('click', () => selectPoint(Number(point.point_no)));
     group.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectPoint(Number(point.point_no)); } });
     svg.appendChild(group);
   });
 
-  // Length and width dimension lines.
-  svg.appendChild(svgEl('line', { x1: ox, y1: bottom + 48, x2: ox + plotW, y2: bottom + 48, stroke: '#526e61', 'stroke-width': 2, 'marker-start': 'url(#arrowhead)', 'marker-end': 'url(#arrowhead)' }));
-  svg.appendChild(svgEl('text', { x: ox + plotW / 2, y: bottom + 38, 'text-anchor': 'middle', 'font-size': 17, fill: '#214e3d', 'font-weight': 800 }, `দৈর্ঘ্য ${fmtCoord(field.length_m)} মিটার`));
-  svg.appendChild(svgEl('line', { x1: ox - 42, y1: top, x2: ox - 42, y2: bottom, stroke: '#526e61', 'stroke-width': 2, 'marker-start': 'url(#arrowhead)', 'marker-end': 'url(#arrowhead)' }));
-  svg.appendChild(svgEl('text', { x: ox - 66, y: (top + bottom) / 2, 'text-anchor': 'middle', 'font-size': 16, fill: '#214e3d', 'font-weight': 800, transform: `rotate(-90 ${ox - 66} ${(top + bottom) / 2})` }, `প্রস্থ ${fmtCoord(field.width_m)} মিটার`));
-  svg.appendChild(svgEl('text', { x: ox + 4, y: bottom + 21, 'font-size': 15, fill: '#0d4d35', 'font-weight': 900 }, 'A (0, 0) — শুরুর কোণ'));
-  svg.appendChild(svgEl('text', { x: ox + plotW - 4, y: top - 15, 'text-anchor': 'end', 'font-size': 13, fill: '#506b60' }, 'মাপ: মিটার'));
+  // Whole-field dimensions and the declared reference corner A = (0, 0).
+  svg.appendChild(svgEl('line', { x1: ox, y1: bottom + 78, x2: ox + plotW, y2: bottom + 78, stroke: '#526e61', 'stroke-width': 2.5, 'marker-start': 'url(#sf-arrowhead)', 'marker-end': 'url(#sf-arrowhead)' }));
+  svg.appendChild(svgEl('text', { x: ox + plotW / 2, y: bottom + 109, 'text-anchor': 'middle', 'font-size': 19, fill: '#214e3d', 'font-weight': 900 }, `মাঠের মোট দৈর্ঘ্য: ${fmtCoord(length)} মিটার`));
+  svg.appendChild(svgEl('line', { x1: ox - 72, y1: top, x2: ox - 72, y2: bottom, stroke: '#526e61', 'stroke-width': 2.5, 'marker-start': 'url(#sf-arrowhead)', 'marker-end': 'url(#sf-arrowhead)' }));
+  svg.appendChild(svgEl('text', { x: ox - 105, y: (top + bottom) / 2, 'text-anchor': 'middle', 'font-size': 18, fill: '#214e3d', 'font-weight': 900, transform: `rotate(-90 ${ox - 105} ${(top + bottom) / 2})` }, `মাঠের মোট প্রস্থ: ${fmtCoord(width)} মিটার`));
+  svg.appendChild(svgEl('circle', { cx: ox, cy: bottom, r: 8, fill: '#0d4d35', stroke: '#ffffff', 'stroke-width': 3 }));
+  svg.appendChild(svgEl('rect', { x: ox - 14, y: bottom + 5, width: 52, height: 27, rx: 8, fill: '#0d4d35' }));
+  svg.appendChild(svgEl('text', { x: ox + 12, y: bottom + 24, 'text-anchor': 'middle', 'font-size': 14, fill: '#ffffff', 'font-weight': 900 }, 'A (0,0)'));
+  svg.appendChild(svgEl('text', { x: W / 2, y: H - 22, 'text-anchor': 'middle', 'font-size': 15, fill: '#355b49' }, `হলুদ ড্যাশ রেখা: পাশাপাশি নমুনা পয়েন্টের সরাসরি দূরত্ব • নির্দিষ্ট অবস্থানের জন্য X ও Y মিটার মাপুন`));
+
   renderPointList(points);
 }
+
 function renderPointList(points) {
   const list = $('point-list');
   if (!list) return;
@@ -202,51 +239,132 @@ function currentPoint() {
 }
 function clearSampleInputs() {
   [
-    'sample-air-temp', 'sample-air-hum', 'sample-soil-temp', 'sample-moist', 'sample-ec', 'sample-ph', 'sample-n', 'sample-p', 'sample-k',
-    'sample-n-raw', 'sample-p-raw', 'sample-k-raw', 'sample-n-corrected', 'sample-p-corrected', 'sample-k-corrected'
-  ].forEach((id) => { $(id).value = '—'; });
+    'sample-air-temp', 'sample-air-hum', 'sample-soil-temp', 'sample-moist', 'sample-ec', 'sample-ph', 'sample-n', 'sample-p', 'sample-k'
+  ].forEach((id) => { const field = $(id); if (field) field.value = '—'; });
 }
 function populateSample(sample) {
   const values = sample || {};
   const mapping = {
     'sample-air-temp': ['air_temp', 2], 'sample-air-hum': ['air_hum', 2], 'sample-soil-temp': ['soil_temp', 2],
     'sample-moist': ['moisture', 2], 'sample-ec': ['ec', 2], 'sample-ph': ['ph', 2],
-    'sample-n': ['n_frg', 4], 'sample-p': ['p_frg', 2], 'sample-k': ['k_frg', 4],
-    'sample-n-raw': ['n_raw', 3], 'sample-p-raw': ['p_raw', 3], 'sample-k-raw': ['k_raw', 3],
-    'sample-n-corrected': ['n_corrected', 3], 'sample-p-corrected': ['p_corrected', 3], 'sample-k-corrected': ['k_corrected', 3]
+    'sample-n': ['n_frg', 4], 'sample-p': ['p_frg', 2], 'sample-k': ['k_frg', 4]
   };
-  Object.entries(mapping).forEach(([id, [key, digits]]) => { $(id).value = values[key] === undefined || values[key] === null ? '—' : fmt(values[key], digits); });
+  Object.entries(mapping).forEach(([id, [key, digits]]) => {
+    const input = $(id);
+    if (input) input.value = values[key] === undefined || values[key] === null ? '—' : fmt(values[key], digits);
+  });
 }
 function updatePointLocation(point) {
   $('point-coordinate').innerHTML = `
     <div><span>দৈর্ঘ্য বরাবর (X)</span><strong>${fmtCoord(point.x_m)} মিটার</strong><small>A কোণ থেকে মাপুন</small></div>
     <div><span>প্রস্থ বরাবর (Y)</span><strong>${fmtCoord(point.y_m)} মিটার</strong><small>A কোণ থেকে মাপুন</small></div>
     <div><span>A কোণ থেকে সরাসরি দূরত্ব</span><strong>${fmtCoord(point.distance_from_origin_m)} মিটার</strong><small>তির্যক দূরত্ব</small></div>
-    <div><span>দূরের দৈর্ঘ্যের কিনারা</span><strong>${fmtCoord(point.distance_to_far_length_edge_m)} মিটার</strong><small>শেষ কিনারা পর্যন্ত</small></div>`;
+    <div><span>বিপরীত দৈর্ঘ্যের কিনারা পর্যন্ত</span><strong>${fmtCoord(point.distance_to_far_length_edge_m)} মিটার</strong><small>শেষ কিনারা পর্যন্ত</small></div>`;
   const nearest = point.nearest_points || [];
-  $('point-neighbors').innerHTML = `<strong>কাছের নমুনা পয়েন্ট থেকে দূরত্ব:</strong> ${nearest.length ? nearest.map((item) => `<span class="neighbor-chip">${pointId(item.point_no)} — ${fmtCoord(item.distance_m)} মি</span>`).join('') : 'কোনো পাশের পয়েন্ট নেই'}`;
+  $('point-neighbors').innerHTML = `<strong>কাছের নমুনা পয়েন্ট থেকে দূরত্ব:</strong> ${nearest.length ? nearest.map((item) => `<span class="neighbor-chip">${pointId(item.point_no)} — ${fmtCoord(item.distance_m)} মিটার</span>`).join('') : 'কোনো পাশের পয়েন্ট নেই'}`;
+}
+function setPointBaseline() {
+  if (state.latestLive && Number.isFinite(Number(state.latestLive.id))) {
+    state.selectedPointBaselineId = Number(state.latestLive.id);
+    state.baselinePending = false;
+  } else {
+    state.selectedPointBaselineId = null;
+    state.baselinePending = true;
+  }
+  state.savedSinceSelection = false;
+  state.pendingSample = null;
+}
+function liveIsFresh(sample) {
+  if (!sample || !sample.timestamp) return false;
+  const time = new Date(sample.timestamp).getTime();
+  return Number.isFinite(time) && Date.now() - time <= LIVE_MAX_AGE_MS && time <= Date.now() + 15000;
+}
+function updateSelectedPointLive(data) {
+  const point = currentPoint();
+  if (!state.grid || !point || !$('capture-point')) return;
+  const reading = data && data.available && Number.isFinite(Number(data.id)) ? data : null;
+  const isFresh = liveIsFresh(reading);
+
+  if (!reading) {
+    state.pendingSample = null;
+    $('capture-point').disabled = true;
+    $('sensor-capture-status').textContent = 'সার্ভারে এখনো সেন্সরের পাঠ নেই। ESP32-এর Wi-Fi ও cloud upload পরীক্ষা করুন।';
+    $('reading-window').textContent = 'লাইভ পাঠ পাওয়া গেলে এখানে সময় দেখাবে।';
+    if (!point.sample) clearSampleInputs();
+    return;
+  }
+
+  // Always display the latest live value; the save button is enabled only after
+  // a new server reading arrives after this specific point was selected.
+  populateSample(reading);
+  $('reading-window').textContent = `সর্বশেষ লাইভ পাঠ: ${dateBn(reading.timestamp)}`;
+
+  if (state.baselinePending) {
+    state.selectedPointBaselineId = Number(reading.id);
+    state.baselinePending = false;
+    state.pendingSample = null;
+    $('capture-point').disabled = true;
+    $('sensor-capture-status').textContent = 'বর্তমান সেন্সর মান দেখানো হচ্ছে। এই পয়েন্ট নির্বাচনের পরের নতুন পাঠ এলে সংরক্ষণ সক্রিয় হবে।';
+    return;
+  }
+
+  const newAfterSelection = Number(reading.id) > Number(state.selectedPointBaselineId);
+  if (state.savedSinceSelection) {
+    $('capture-point').disabled = true;
+    $('sensor-capture-status').textContent = `${pointId(point.point_no)}-এর তথ্য সংরক্ষিত হয়েছে। অন্য পয়েন্টে যেতে সেটি নির্বাচন করুন; একই পয়েন্ট আবার মাপতে হলে পয়েন্টটি পুনরায় নির্বাচন করুন।`;
+    return;
+  }
+
+  if (!isFresh) {
+    state.pendingSample = null;
+    $('capture-point').disabled = true;
+    $('point-status').textContent = 'নতুন পাঠের অপেক্ষা';
+    $('point-status').classList.remove('badge-saved');
+    $('sensor-capture-status').textContent = 'সর্বশেষ পাঠ পুরোনো। ESP32 থেকে নতুন cloud reading আসার অপেক্ষা চলছে।';
+    return;
+  }
+
+  if (!newAfterSelection) {
+    state.pendingSample = null;
+    $('capture-point').disabled = true;
+    $('point-status').textContent = 'নতুন পাঠের অপেক্ষা';
+    $('point-status').classList.remove('badge-saved');
+    $('sensor-capture-status').textContent = 'সর্বশেষ লাইভ মান দেখানো হচ্ছে। নির্বাচিত পয়েন্টে সেন্সর স্থির রাখুন; পরের নতুন পাঠ এলে সংরক্ষণ করতে পারবেন।';
+    return;
+  }
+
+  state.pendingSample = {
+    fieldId: state.fieldId,
+    pointNo: Number(state.selectedPoint),
+    reading,
+    readingCount: 1,
+    firstReadingAt: reading.timestamp,
+    lastReadingAt: reading.timestamp,
+    readingIds: [Number(reading.id)]
+  };
+  $('capture-point').disabled = false;
+  $('point-status').textContent = 'লাইভ পাঠ প্রস্তুত';
+  $('point-status').classList.remove('badge-saved');
+  $('sensor-capture-status').textContent = `${pointId(point.point_no)}-এর নতুন লাইভ পাঠ পাওয়া গেছে। মানগুলো দেখে সংরক্ষণ করুন।`;
 }
 function selectPoint(number) {
-  state.captureSequence += 1; // invalidate any polling routine for the previous point
-  state.capture = null;
-  state.pendingSample = null;
   state.selectedPoint = number;
   const point = currentPoint();
   if (!point) return;
+  setPointBaseline();
   $('active-point').textContent = pointId(number);
-  $('point-status').textContent = point.saved ? 'সংরক্ষিত' : 'অপেক্ষমাণ';
+  $('point-status').textContent = point.saved ? 'আগে সংরক্ষিত' : 'লাইভ পাঠের অপেক্ষায়';
   $('point-status').classList.toggle('badge-saved', Boolean(point.saved));
-  $('point-help').textContent = `এই পয়েন্টে যান। A কোণ থেকে X=${fmtCoord(point.x_m)} মি এবং Y=${fmtCoord(point.y_m)} মি মেপে অবস্থান ঠিক করুন।`;
+  $('point-help').textContent = `মাঠে ${pointId(number)} পয়েন্টে যান। A কোণ থেকে X=${fmtCoord(point.x_m)} মিটার এবং Y=${fmtCoord(point.y_m)} মিটার মেপে সেন্সর বসান।`;
   updatePointLocation(point);
-  clearSampleInputs();
   $('capture-point').disabled = true;
-  $('start-capture').disabled = false;
-  $('start-capture').textContent = 'সেন্সর থেকে ৩টি নতুন পাঠ নিন';
-  $('sensor-capture-status').textContent = point.saved ? 'আগের তথ্য দেখানো হচ্ছে। নতুন করে মাপতে চাইলে নতুন পাঠ সংগ্রহ করুন।' : 'এই পয়েন্টে এখনো কোনো তথ্য সংরক্ষণ করা হয়নি।';
-  $('reading-window').textContent = point.sample?.captured_at ? `আগে সংরক্ষিত: ${dateBn(point.sample.captured_at)}; পাঠের সংখ্যা: ${fmtCoord(point.sample.reading_count || 1)}` : 'গড় তৈরি হলে পাঠের সময় দেখা যাবে।';
+  $('capture-point').textContent = 'এই পয়েন্টের তথ্য সংরক্ষণ করুন';
   if (point.sample) populateSample(point.sample);
   else clearSampleInputs();
+  $('sensor-capture-status').textContent = 'এই পয়েন্ট নির্বাচন করা হয়েছে। সেন্সরের সর্বশেষ পাঠ লাইভ দেখানো হচ্ছে; পরের নতুন পাঠ এলে সংরক্ষণ সক্রিয় হবে।';
+  $('reading-window').textContent = point.sample?.captured_at ? `আগের সংরক্ষিত পাঠ: ${dateBn(point.sample.captured_at)}` : 'লাইভ সেন্সর পাঠের অপেক্ষায়…';
   drawField(state.grid.points, state.grid.field);
+  updateSelectedPointLive(state.latestLive);
 }
 
 async function createField() {
@@ -263,8 +381,6 @@ async function createField() {
     crop: $('field-crop').value, variety: $('field-variety').value,
     season: $('field-season').value, yield_goal: $('field-yield').value
   };
-  state.capture = null;
-  state.captureSequence += 1;
   state.pendingSample = null;
   const button = $('create-field'); button.disabled = true; button.textContent = 'মাঠ তৈরি হচ্ছে…';
   try {
@@ -292,116 +408,66 @@ async function loadGrid() {
 }
 $('reload-grid').addEventListener('click', async () => { try { await loadGrid(); flash('গ্রিড হালনাগাদ হয়েছে।', 'success'); } catch (error) { flash(error.message, 'error'); } });
 
-async function startSensorCapture() {
-  if (state.capture) {
-    state.capture = null;
-    state.captureSequence += 1;
-    $('start-capture').disabled = false;
-    $('start-capture').textContent = 'সেন্সর থেকে ৩টি নতুন পাঠ নিন';
-    $('sensor-capture-status').textContent = 'পাঠ সংগ্রহ বাতিল করা হয়েছে।';
-    return;
-  }
-  if (!state.fieldId || !state.grid) return flash('আগে মাঠ তৈরি করুন বা ইতিহাস থেকে মাঠ খুলুন।', 'error');
-  const point = currentPoint();
-  if (!point) return flash('নমুনা পয়েন্ট নির্বাচন করুন।', 'error');
-
-  const token = ++state.captureSequence;
-  const capture = { token, fieldId: state.fieldId, pointNo: state.selectedPoint, afterId: null, startedAt: Date.now() };
-  state.capture = capture;
-  state.pendingSample = null;
-  $('capture-point').disabled = true;
-  $('start-capture').disabled = false;
-  $('start-capture').textContent = 'পাঠ সংগ্রহ বন্ধ করুন';
-  $('sensor-capture-status').textContent = 'ESP32-এর সর্বশেষ পাঠ যাচাই করা হচ্ছে…';
-  $('reading-window').textContent = 'নতুন তিনটি পাঠ সংগ্রহ করা হচ্ছে।';
-  try {
-    const latest = await api('/api/live');
-    if (state.capture !== capture) return;
-    if (!latest.available || !Number.isFinite(Number(latest.id))) {
-      state.capture = null;
-      $('start-capture').textContent = 'সেন্সর থেকে ৩টি নতুন পাঠ নিন';
-      $('sensor-capture-status').textContent = 'সার্ভারে কোনো সেন্সর পাঠ নেই। ESP32 Wi-Fi-তে যুক্ত আছে এবং Cloud upload successful দেখাচ্ছে কি না পরীক্ষা করুন।';
-      return;
-    }
-    capture.afterId = Number(latest.id);
-    $('sensor-capture-status').textContent = `সংগ্রহ শুরু হয়েছে। নির্বাচিত ${pointId(capture.pointNo)}-এ সেন্সর স্থির রাখুন; ${SAMPLE_COUNT}টি নতুন পাঠের অপেক্ষা চলছে (0/${SAMPLE_COUNT})।`;
-    await pollForCapture(capture);
-  } catch (error) {
-    if (state.capture === capture) {
-      state.capture = null;
-      $('start-capture').textContent = 'সেন্সর থেকে ৩টি নতুন পাঠ নিন';
-      $('sensor-capture-status').textContent = `সেন্সর API পড়া যায়নি: ${error.message}`;
-    }
-  }
-}
-$('start-capture').addEventListener('click', startSensorCapture);
-
-async function pollForCapture(capture) {
-  while (state.capture === capture) {
-    if (Date.now() - capture.startedAt > CAPTURE_TIMEOUT_MS) {
-      state.capture = null;
-      $('start-capture').textContent = 'আবার ৩টি নতুন পাঠ নিন';
-      $('sensor-capture-status').textContent = 'সময় শেষ: নতুন ৩টি পাঠ পাওয়া যায়নি। ESP32 upload interval, Wi-Fi ও /api/live পরীক্ষা করুন; তারপর আবার চেষ্টা করুন।';
-      return;
-    }
-    try {
-      const result = await api(`/api/live/recent?after_id=${encodeURIComponent(capture.afterId)}&limit=${SAMPLE_COUNT}&max_age_sec=120`);
-      if (state.capture !== capture) return;
-      $('sensor-capture-status').textContent = `নতুন পাঠ পাওয়া গেছে: ${fmtCoord(result.count || 0, 0)}/${SAMPLE_COUNT}। ESP32 থেকে নতুন পাঠ আসা পর্যন্ত সেন্সর একই জায়গায় রাখুন।`;
-      if (result.available && result.average) {
-        state.pendingSample = {
-          fieldId: capture.fieldId, pointNo: capture.pointNo,
-          average: result.average, readingCount: result.count,
-          firstReadingAt: result.first_reading_at, lastReadingAt: result.last_reading_at,
-          readingIds: result.reading_ids || []
-        };
-        state.capture = null;
-        populateSample(result.average);
-        $('point-status').textContent = 'গড় প্রস্তুত';
-        $('point-status').classList.remove('badge-saved');
-        $('sensor-capture-status').textContent = `${fmtCoord(result.count, 0)}টি নতুন পাঠের গড় তৈরি হয়েছে। নিচের মান যাচাই করে সংরক্ষণ বোতাম চাপুন।`;
-        $('reading-window').textContent = `পাঠ ${dateBn(result.first_reading_at)} থেকে ${dateBn(result.last_reading_at)} • মোট ${fmtCoord(result.count, 0)}টি পাঠের গড়`;
-        $('capture-point').disabled = false;
-        $('start-capture').textContent = 'আবার নতুন ৩টি পাঠ নিন';
-        drawField(state.grid.points, state.grid.field);
-        return;
-      }
-    } catch (error) {
-      if (state.capture !== capture) return;
-      $('sensor-capture-status').textContent = `পাঠের অবস্থা যাচাই হচ্ছে। সার্ভার বার্তা: ${error.message}`;
-    }
-    await sleep(POLL_INTERVAL_MS);
-  }
-}
-
 $('capture-point').addEventListener('click', async () => {
   const pending = state.pendingSample;
   const point = currentPoint();
   if (!pending || !point || pending.fieldId !== state.fieldId || pending.pointNo !== state.selectedPoint) {
-    return flash('এই পয়েন্টের জন্য আগে নতুন ৩টি সেন্সর পাঠ সংগ্রহ করুন।', 'error');
+    return flash('এই পয়েন্টের নতুন লাইভ পাঠ আসার পর সংরক্ষণ করুন।', 'error');
   }
-  const a = pending.average;
-  const payload = {
-    field_id: state.fieldId, point_no: state.selectedPoint, x_m: Number(point.x_m), y_m: Number(point.y_m),
-    moisture: a.moisture, ec: a.ec, ph: a.ph,
-    n_raw: a.n_raw, p_raw: a.p_raw, k_raw: a.k_raw,
-    n_corrected: a.n_corrected, p_corrected: a.p_corrected, k_corrected: a.k_corrected,
-    n_frg: a.n_frg, p_frg: a.p_frg, k_frg: a.k_frg,
-    air_temp: a.air_temp, air_hum: a.air_hum, soil_temp: a.soil_temp,
-    reading_count: pending.readingCount,
-    first_reading_at: pending.firstReadingAt,
-    last_reading_at: pending.lastReadingAt
-  };
-  const button = $('capture-point'); button.disabled = true; button.textContent = 'তথ্য সংরক্ষণ হচ্ছে…';
-  try {
-    await api('/api/samples', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!liveIsFresh(pending.reading)) {
     state.pendingSample = null;
-    await loadGrid();
-    flash(`${pointId(point.point_no)}-এর ${fmtCoord(pending.readingCount, 0)}টি পাঠের গড় সংরক্ষিত হয়েছে। পরের পয়েন্ট নির্বাচন করুন।`, 'success');
+    $('capture-point').disabled = true;
+    return flash('লাইভ পাঠ পুরোনো হয়ে গেছে। নতুন sensor reading আসা পর্যন্ত অপেক্ষা করুন।', 'error');
+  }
+  const reading = pending.reading;
+  const payload = {
+    field_id: state.fieldId,
+    point_no: state.selectedPoint,
+    x_m: Number(point.x_m),
+    y_m: Number(point.y_m),
+    moisture: Number(reading.moisture),
+    ec: Number(reading.ec),
+    ph: Number(reading.ph),
+    n_raw: Number(reading.n_raw),
+    p_raw: Number(reading.p_raw),
+    k_raw: Number(reading.k_raw),
+    n_corrected: Number(reading.n_corrected),
+    p_corrected: Number(reading.p_corrected),
+    k_corrected: Number(reading.k_corrected),
+    n_frg: Number(reading.n_frg),
+    p_frg: Number(reading.p_frg),
+    k_frg: Number(reading.k_frg),
+    air_temp: Number(reading.air_temp),
+    air_hum: Number(reading.air_hum),
+    soil_temp: Number(reading.soil_temp),
+    reading_count: 1,
+    first_reading_at: reading.timestamp,
+    last_reading_at: reading.timestamp
+  };
+  const button = $('capture-point');
+  button.disabled = true;
+  button.textContent = 'তথ্য সংরক্ষণ হচ্ছে…';
+  try {
+    const result = await api('/api/samples', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    point.saved = true;
+    point.sample = { ...payload, captured_at: result.captured_at || new Date().toISOString(), reading_count: 1 };
+    state.pendingSample = null;
+    state.savedSinceSelection = true;
+    state.selectedPointBaselineId = Number(state.latestLive?.id || reading.id);
+    $('point-status').textContent = 'সংরক্ষিত';
+    $('point-status').classList.add('badge-saved');
+    populateSample(reading);
+    $('sensor-capture-status').textContent = `${pointId(point.point_no)}-এর লাইভ sensor reading সফলভাবে সংরক্ষণ করা হয়েছে।`;
+    $('reading-window').textContent = `সংরক্ষণের সময়: ${dateBn(result.captured_at || new Date().toISOString())}`;
+    $('grid-summary').textContent = `${fmtCoord(state.grid.points.length, 0)}টি পয়েন্ট • ${fmtCoord(state.grid.field.length_m)} × ${fmtCoord(state.grid.field.width_m)} মিটার • ব্যবধান ${fmtCoord(state.grid.field.spacing_m)} মিটার • সংরক্ষিত ${fmtCoord(state.grid.points.filter((p) => p.saved).length, 0)}টি`;
+    drawField(state.grid.points, state.grid.field);
+    flash(`${pointId(point.point_no)}-এর লাইভ পাঠ সংরক্ষিত হয়েছে। পরের পয়েন্টে যান।`, 'success');
   } catch (error) {
-    button.disabled = false;
+    button.disabled = !state.pendingSample;
     flash(error.message, 'error');
-  } finally { button.textContent = 'এই পয়েন্টের তথ্য সংরক্ষণ করুন'; }
+  } finally {
+    button.textContent = 'এই পয়েন্টের তথ্য সংরক্ষণ করুন';
+  }
 });
 
 $('run-calculation').addEventListener('click', async () => {
@@ -538,8 +604,6 @@ async function restoreField(fieldId) {
   state.fieldId = Number(field.id);
   state.selectedPoint = 1;
   state.pendingSample = null;
-  state.capture = null;
-  state.captureSequence += 1;
   state.grid = null;
   localStorage.setItem('smartFarmingLastFieldId', String(field.id));
   $('field-name').value = field.name || '';

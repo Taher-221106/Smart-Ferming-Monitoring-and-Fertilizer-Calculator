@@ -146,3 +146,18 @@ p { line-height: 1.7; }
   .point-header { flex-direction: column; }
   .point-list-item { grid-template-columns: auto 1fr; }
 }
+
+
+/* Live point capture: values refresh automatically; no manual reading-trigger button. */
+.live-indicator {
+  display: inline-block;
+  flex: 0 0 11px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #1da864;
+  box-shadow: 0 0 0 4px #e0f5e8;
+}
+.capture-controls { align-items: flex-start; background: #f1faf4; border: 1px solid #c9e5d3; border-radius: 12px; padding: 13px 15px; }
+.capture-status { min-width: 0; }
+.field-map svg { min-height: 0; }
